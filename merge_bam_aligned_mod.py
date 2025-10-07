@@ -9,12 +9,10 @@ unaligned = pysam.AlignmentFile(unaligned_mod_bam, "rb", check_sq=False)
 aligned = pysam.AlignmentFile(aligned_bam, "rb")
 out = pysam.AlignmentFile(output_bam, "wb", template=aligned)
 
-# Iterate and merge (example: copying MM/ML tags from unaligned to aligned)
+# Merge MM/ML tags
 for a in aligned:
-    # Find corresponding read in unaligned BAM
     try:
-        u = unaligned.fetch(a.query_name).__next__()
-        # Copy modification tags if present
+        u = next(unaligned.fetch(a.query_name))
         if u.has_tag("MM"):
             a.set_tag("MM", u.get_tag("MM"))
         if u.has_tag("ML"):
