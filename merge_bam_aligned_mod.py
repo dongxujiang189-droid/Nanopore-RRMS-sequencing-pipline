@@ -1,17 +1,21 @@
 import pysam
 
+# Paths
 unaligned_mod_bam = "/mnt/e/Data/seq_for_human_293t2/barcode04/barcode04_merged.bam"
 aligned_bam = "/mnt/e/Data/seq_for_human_293t2/barcode04/barcode04_aligned.sorted.bam"
 output_bam = "/mnt/e/Data/seq_for_human_293t2/barcode04/barcode04_aligned_with_mod.bam"
 
+# Open BAM files
 unaligned = pysam.AlignmentFile(unaligned_mod_bam, "rb", check_sq=False)
 aligned = pysam.AlignmentFile(aligned_bam, "rb")
 out = pysam.AlignmentFile(output_bam, "wb", template=aligned)
 
-# Build a dictionary of unaligned reads
+# Build dictionary of unaligned reads by query_name
 unaligned_dict = {}
-for u in unaligned:
+for u in unaligned.fetch(until_eof=True):
     unaligned_dict[u.query_name] = u
+
+print(f"Loaded {len(unaligned_dict)} unaligned reads.")
 
 # Merge MM/ML tags
 for a in aligned:
@@ -26,3 +30,4 @@ for a in aligned:
 unaligned.close()
 aligned.close()
 out.close()
+print("Finished merging modifications.")
