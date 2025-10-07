@@ -1,37 +1,26 @@
-#!/bin/bash
-
-# --- 1. Set paths ---
-BAM_PATH="/mnt/e/Data/seq_for_human_293t2/barcode04/barcode04_aligned.sorted.bam"
-OUTPUT_TSV="/mnt/e/Data/seq_for_human_293t2/barcode04/barcode04_methylation.tsv"
-OUTPUT_HTML="/mnt/e/Data/seq_for_human_293t2/barcode04/barcode04_methylation.html"
-
-# --- 2. Extract 5mC/5hmC from BAM ---
-python3 << EOF
+#!/usr/bin/env python3
 import pysam
+import os
 
-bamfile = pysam.AlignmentFile("$BAM_PATH", "rb")
-out = open("$OUTPUT_TSV", "w")
-out.write("chrom\tpos\tstrand\tmod_type\tprob\n")
+# --- Settings ---
+bam_path = "/mnt/c/Users/Jiangd/barcode04_aligned.sorted.bam"  # Update to your BAM file
+output_bed = "/mnt/c/Users/Jiangd/barcode04_modifications.bed"
 
-for read in bamfile.fetch():
-    if read.has_tag("Mm") and read.has_tag("Ml"):
-        mm_tag = read.get_tag("Mm")
-        ml_tag = list(read.get_tag("Ml"))
-        chrom = read.reference_name
-        strand = "-" if read.is_reverse else "+"
-        mods = mm_tag.split(";")
-        idx = 0
-        for mod in mods:
-            if not mod: continue
-            mod_type, positions = mod.split(",",1)
-            positions = positions.split(",")
-            for p in positions:
-                p_int = int(p) + read.reference_start
-                out.write(f"{chrom}\t{p_int}\t{strand}\t{mod_type}\t{ml_tag[idx]}\n")
-                idx += 1
+# --- Open BAM file ---
+bamfile = pysam.AlignmentFile(bam_path, "rb")
 
-out.close()
+# --- Open output BED-like file ---
+with open(output_bed, "w") as out:
+    for read in bamfile.fetch():
+        # Check if read has modified base tags (Mm/Ml)
+        tags = dict(read.get_tags())
+        if "Mm" in tags and "Ml" in tags:
+            mm_tag = tags["Mm"]
+            ml_tag = tags["Ml"]
+            chrom = bamfile.get_reference_name(read.reference_id)
+            start = read.reference_start
+            # Write a simple BED-like line: chrom, start, end, read_name, modification_info
+            out.write(f"{chrom}\t{start}\t{read.reference_end}\t{read.query_name}\t{mm_tag}|{ml_tag}\n")
+
 bamfile.close()
-EOF
-
-# --- 3.
+print(f"[INFO] Methylation BED-like file saved to: {output_bed}")
