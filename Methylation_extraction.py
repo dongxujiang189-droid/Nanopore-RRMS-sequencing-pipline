@@ -3,8 +3,8 @@ import pysam
 import os
 
 # --- Settings ---
-bam_path = "/mnt/c/Users/Jiangd/barcode04_aligned.sorted.bam"  # Update to your BAM file
-output_bed = "/mnt/c/Users/Jiangd/barcode04_modifications.bed"
+bam_path = "/mnt/e/Data/seq_for_human_293t2/barcode04/barcode04_aligned.sorted.bam"  # Update to your BAM file
+output_bed = "/mnt/e/Data/seq_for_human_293t2/barcode04/barcode04_modifications.bed" 
 
 # --- Open BAM file ---
 bamfile = pysam.AlignmentFile(bam_path, "rb")
