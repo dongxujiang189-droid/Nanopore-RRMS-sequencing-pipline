@@ -10,24 +10,29 @@ unaligned = pysam.AlignmentFile(unaligned_mod_bam, "rb", check_sq=False)
 aligned = pysam.AlignmentFile(aligned_bam, "rb")
 out = pysam.AlignmentFile(output_bam, "wb", template=aligned)
 
-# Build dictionary of unaligned reads by query_name
-unaligned_dict = {}
+# Build a dictionary of MM/ML tags only (smaller memory footprint)
+unaligned_tags = {}
 for u in unaligned.fetch(until_eof=True):
-    unaligned_dict[u.query_name] = u
+    tags = {}
+    if u.has_tag("MM"):
+        tags["MM"] = u.get_tag("MM")
+    if u.has_tag("ML"):
+        tags["ML"] = u.get_tag("ML")
+    if tags:
+        unaligned_tags[u.query_name] = tags
 
-print(f"Loaded {len(unaligned_dict)} unaligned reads.")
+print(f"Loaded modification tags for {len(unaligned_tags)} reads.")
 
-# Merge MM/ML tags
-for a in aligned:
-    u = unaligned_dict.get(a.query_name)
-    if u:
-        if u.has_tag("MM"):
-            a.set_tag("MM", u.get_tag("MM"))
-        if u.has_tag("ML"):
-            a.set_tag("ML", u.get_tag("ML"))
+# Merge MM/ML tags into aligned BAM
+for a in aligned.fetch(until_eof=True):
+    tags = unaligned_tags.get(a.query_name)
+    if tags:
+        for tag_name, tag_value in tags.items():
+            a.set_tag(tag_name, tag_value)
     out.write(a)
 
 unaligned.close()
 aligned.close()
 out.close()
-print("Finished merging modifications.")
+
+print(f"Finished merging modifications. Output saved to {output_bam}")
