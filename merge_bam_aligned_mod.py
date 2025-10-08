@@ -1,9 +1,9 @@
 import pysam
 
 # Paths
-unaligned_mod_bam = "/mnt/e/Data/seq_for_human_293t2/barcode06/barcode06_merged.bam"
-aligned_bam = "/mnt/e/Data/seq_for_human_293t2/barcode06/barcode06_aligned.sorted.bam"
-output_bam = "/mnt/e/Data/seq_for_human_293t2/barcode06/barcode06_aligned_with_mod.bam"
+unaligned_mod_bam = "/mnt/e/Data/seq_for_human_293t2/barcode07/barcode07_merged.bam"
+aligned_bam = "/mnt/e/Data/seq_for_human_293t2/barcode07/barcode07_aligned.sorted.bam"
+output_bam = "/mnt/e/Data/seq_for_human_293t2/barcode07/barcode07_aligned_with_mod.bam"
 
 # Open BAM files
 unaligned = pysam.AlignmentFile(unaligned_mod_bam, "rb", check_sq=False)
