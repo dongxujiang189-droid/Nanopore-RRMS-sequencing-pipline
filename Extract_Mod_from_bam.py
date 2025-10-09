@@ -11,7 +11,7 @@ samples = ["barcode04", "barcode05", "barcode06", "barcode07"]
 output_dir = os.path.join(base_dir, "mod_positions")
 os.makedirs(output_dir, exist_ok=True)
 
-gtf_file = "/mnt/e/annotations/Homo_sapiens.GRCh38.gtf"  # make sure GTF is downloaded
+gtf_file = "/mnt/e/annotations/Homo_sapiens.GRCh38.gtf"  # make sure GTF exists
 
 all_gene_enrichment = []
 
@@ -25,18 +25,27 @@ for sample in samples:
     for read in tqdm(bam.fetch(until_eof=True)):
         if not read.has_tag("MM") or not read.has_tag("ML"):
             continue
+
         mm = read.get_tag("MM")
-        start = read.reference_start
         chrom = bam.get_reference_name(read.reference_id)
+        start = read.reference_start
+
+        # Skip invalid coordinates
+        if chrom is None or start is None or start < 0:
+            continue
 
         if "C+m?" in mm:
-            records.append([chrom, start, start + 1, "5mC"])  # BED: 0-based start, 1-based end
+            records.append([chrom, start, start + 1, "5mC"])
         if "C+h?" in mm:
             records.append([chrom, start, start + 1, "5hmC"])
 
     bam.close()
 
-    # Save BED
+    if not records:
+        print(f"No valid modification records found for {sample}")
+        continue
+
+    # Save BED file
     bed_df = pd.DataFrame(records, columns=["chr", "start", "end", "mod_type"])
     bed_file = os.path.join(output_dir, f"mods_positions_{sample}.bed")
     bed_df.to_csv(bed_file, sep="\t", header=False, index=False)
@@ -66,4 +75,5 @@ for sample in samples:
 all_gene_df = pd.concat(all_gene_enrichment, axis=0)
 all_gene_df.to_csv(os.path.join(output_dir, "per_gene_mods_all_samples.tsv"), sep="\t", index=False)
 print("Saved combined per-gene modification table.")
+
 
