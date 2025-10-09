@@ -6,7 +6,7 @@ import os
 import pybedtools
 
 base_dir = "/mnt/e/Data/seq_for_human_293t2"
-samples = ["barcode04", "barcode05", "barcode06", "barcode07"]
+samples = ["barcode05", "barcode06", "barcode07"]
 
 output_dir = os.path.join(base_dir, "mod_positions")
 os.makedirs(output_dir, exist_ok=True)
