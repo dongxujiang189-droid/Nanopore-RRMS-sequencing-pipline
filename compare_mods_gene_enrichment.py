@@ -39,14 +39,15 @@ for bed_file in tqdm(bed_files, desc="Processing samples"):
 
     # Iterate intersections line by line (memory-efficient)
     for interval in mods.intersect(genes, wa=True, wb=True):
-        mod_type = interval[3]
-        g_attr = interval[12]
+        mod_type = interval[3]  # 5mC or 5hmC
+        g_attr = interval[12]   # GTF attributes
 
         # Extract gene_id using regex
-        m = re.search(r'gene_id "([^"]+)"', g_attr)
-        if m:
-            gene_id = m.group(1)
-            gene_counts[gene_id][mod_type] = gene_counts[gene_id].get(mod_type, 0) + 1
+        match = re.search(r'gene_id "([^"]+)"', g_attr)
+        if match:
+            gene_id = match.group(1)
+            if mod_type in ["5mC", "5hmC"]:
+                gene_counts[gene_id][mod_type] += 1
 
     # Convert dictionary to DataFrame
     summary = pd.DataFrame([
@@ -106,4 +107,3 @@ plt.close()
 print("Generated comparison plots:")
 print(f" - {out_dir}/5hmC_gene_fraction_comparison.png")
 print(f" - {out_dir}/5hmC_gene_fraction_boxplot.png")
-
