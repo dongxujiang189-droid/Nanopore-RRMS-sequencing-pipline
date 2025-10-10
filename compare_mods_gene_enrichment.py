@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 import os
+import re
 import pandas as pd
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import pybedtools
 from collections import defaultdict
+import glob
 
 # -------------------
 # Configuration
@@ -35,20 +37,16 @@ for bed_file in tqdm(bed_files, desc="Processing samples"):
     # Dictionary to hold per-gene counts: gene_id -> {"5mC": count, "5hmC": count}
     gene_counts = defaultdict(lambda: {"5mC": 0, "5hmC": 0})
 
-    # Iterate intersections line by line (no full DataFrame)
+    # Iterate intersections line by line (memory-efficient)
     for interval in mods.intersect(genes, wa=True, wb=True):
-        # BED columns: chr, start, end, mod_type
         mod_type = interval[3]
-
-        # GTF attributes are at interval[12]
         g_attr = interval[12]
-        gene_id_match = pd.Series(g_attr).str.extract(r'gene_id "([^"]+)"')
-        gene_id = gene_id_match[0] if gene_id_match is not None else None
 
-        if gene_id:
-            if mod_type not in gene_counts[gene_id]:
-                gene_counts[gene_id][mod_type] = 0
-            gene_counts[gene_id][mod_type] += 1
+        # Extract gene_id using regex
+        m = re.search(r'gene_id "([^"]+)"', g_attr)
+        if m:
+            gene_id = m.group(1)
+            gene_counts[gene_id][mod_type] = gene_counts[gene_id].get(mod_type, 0) + 1
 
     # Convert dictionary to DataFrame
     summary = pd.DataFrame([
@@ -72,7 +70,6 @@ for bed_file in tqdm(bed_files, desc="Processing samples"):
 # -------------------
 # Merge all per-sample summaries
 # -------------------
-import glob
 all_files = glob.glob(os.path.join(out_dir, "*_summary.csv"))
 combined = pd.concat([pd.read_csv(f) for f in all_files], ignore_index=True)
 combined_file = os.path.join(out_dir, "gene_mod_enrichment_all_samples.csv")
@@ -109,3 +106,4 @@ plt.close()
 print("Generated comparison plots:")
 print(f" - {out_dir}/5hmC_gene_fraction_comparison.png")
 print(f" - {out_dir}/5hmC_gene_fraction_boxplot.png")
+
