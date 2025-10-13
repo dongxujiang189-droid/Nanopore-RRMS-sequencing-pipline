@@ -6,7 +6,7 @@ import numpy as np
 
 # ========= CONFIG =========
 data_dir = "/mnt/e/Data/seq_for_human_293t2/modkit"
-gtf_file = r"E:\annotations\Homo_sapiens.GRCh38.gtf"
+gtf_file = "/mnt/e/annotations/Homo_sapiens.GRCh38.gtf"
 
 samples_files = {
     "barcode04": os.path.join(data_dir, "barcode04_aligned_with_mod.region_mh.stats.tsv"),
