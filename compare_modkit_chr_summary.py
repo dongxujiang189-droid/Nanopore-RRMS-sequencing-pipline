@@ -14,8 +14,10 @@ samples_files = {
     "barcode07": os.path.join(data_dir, "barcode07_aligned_with_mod.region_mh.stats.tsv"),
 }
 
-chrom_order = [f"chr{i}" for i in range(1, 23)] + ["chrX", "chrY"]
+# Only autosomes for clarity
+chrom_order = [f"chr{i}" for i in range(1, 24)]  # chr1 to chr23
 
+# Assign distinct colors per sample
 sample_colors = {
     "barcode04": "red",
     "barcode05": "green",
@@ -66,20 +68,19 @@ summary["chrom"] = pd.Categorical(summary["chrom"], chrom_order, ordered=True)
 summary = summary.sort_values(["chrom", "sample"])
 
 # ========= PLOT LINE CHART =========
-plt.figure(figsize=(20, 6))
-x = np.arange(len(chrom_order))
+plt.figure(figsize=(18, 6))
+x = np.arange(len(chrom_order))  # positions along chromosomes
 
 for bc in samples_files.keys():
     sub = summary[summary["sample"] == bc].set_index("chrom").reindex(chrom_order)
-    sub["sample"].fillna(bc, inplace=True)  # fill sample name
+    sub.fillna(0, inplace=True)
     color = sample_colors[bc]
 
     # Plot 5mC solid line
     plt.plot(
-        x,
-        sub["mean_5mC"],
-        marker=markers[bc],
+        x, sub["mean_5mC"],
         color=color,
+        marker=markers[bc],
         linestyle='-',
         linewidth=2,
         alpha=0.8,
@@ -88,35 +89,26 @@ for bc in samples_files.keys():
 
     # Plot 5hmC dashed line
     plt.plot(
-        x,
-        sub["mean_5hmC"],
-        marker=markers[bc],
+        x, sub["mean_5hmC"],
         color=color,
+        marker=markers[bc],
         linestyle='--',
         linewidth=2,
         alpha=0.8,
         label=f"{bc} 5hmC"
     )
 
-    # Annotate values
-    for xi, row in zip(x, sub.itertuples()):
-        if not pd.isna(row.mean_5mC):
-            plt.text(
-                xi, row.mean_5mC + 0.5, f"{row.mean_5mC:.1f}",
-                color=color, fontsize=7, ha="center", va="bottom"
-            )
-        if not pd.isna(row.mean_5hmC):
-            plt.text(
-                xi, row.mean_5hmC + 0.5, f"{row.mean_5hmC:.1f}",
-                color=color, fontsize=7, ha="center", va="bottom"
-            )
+# Optional: add horizontal grid lines
+plt.grid(axis='y', linestyle=':', alpha=0.5)
 
 plt.xticks(x, chrom_order, rotation=45)
 plt.ylabel("Average modification (%)")
-plt.title("Genome-wide 5mC (solid) and 5hmC (dashed) per chromosome across samples")
+plt.xlabel("Chromosome")
+plt.title("Genome-wide 5mC (solid) and 5hmC (dashed) levels per chromosome (chr1-23)")
+
 plt.ylim(0, 100)
 
-# Remove duplicate legend entries
+# Clean legend without duplicates
 handles, labels = plt.gca().get_legend_handles_labels()
 by_label = dict(zip(labels, handles))
 plt.legend(by_label.values(), by_label.keys(), ncol=4, fontsize=10)
@@ -124,9 +116,13 @@ plt.legend(by_label.values(), by_label.keys(), ncol=4, fontsize=10)
 plt.tight_layout()
 
 # Save figure
-out_fig = os.path.join(data_dir, "modkit_genome_comparison_lines_color_samples.png")
+out_fig = os.path.join(data_dir, "modkit_genome_comparison_lines_chr1_23.png")
 plt.savefig(out_fig, dpi=300)
 plt.close()
 
 # Save summary table
-out_t_
+out_tsv = os.path.join(data_dir, "modkit_genome_comparison_summary_chr1_23.tsv")
+summary.to_csv(out_tsv, sep="\t", index=False)
+
+print(f"[DONE] Figure saved: {out_fig}")
+print(f"[DONE] Summary table saved: {out_tsv}")
