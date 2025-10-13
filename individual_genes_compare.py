@@ -37,7 +37,7 @@ fig = go.Figure()
 
 for bc in samples_files.keys():
     sub = mod_all[mod_all["sample"]==bc].sort_values("genome_pos")
-    # 5mC histogram-like stepped line
+    # Step line for 5mC (solid)
     fig.add_trace(go.Scatter(
         x=sub["genome_pos"],
         y=sub["percent_m"],
@@ -45,7 +45,7 @@ for bc in samples_files.keys():
         line=dict(color=sample_colors[bc], width=2, shape="hv"),
         name=f"{bc} 5mC"
     ))
-    # 5hmC histogram-like stepped line
+    # Step line for 5hmC (dashed)
     fig.add_trace(go.Scatter(
         x=sub["genome_pos"],
         y=sub["percent_h"],
@@ -54,7 +54,7 @@ for bc in samples_files.keys():
         name=f"{bc} 5hmC"
     ))
 
-# Layout for genome-wide visualization
+# Layout
 fig.update_layout(
     title="Genome-wide 5mC (solid) and 5hmC (dashed) per sample",
     xaxis_title="Genome (linearized)",
@@ -66,13 +66,13 @@ fig.update_layout(
     hovermode="x unified"
 )
 
-# Add vertical lines for chromosome separators
+# Add chromosome separators
 for chrom, offset in chrom_offsets.items():
     fig.add_vline(x=offset, line=dict(color="gray", width=1, dash="dot"))
     fig.add_annotation(x=offset, y=mod_all[["percent_m","percent_h"]].max().max(),
                        text=chrom, showarrow=False, yshift=10, font=dict(size=10, color="gray"))
 
 # Save interactive HTML
-out_html = os.path.join(data_dir, "modkit_genome_tracks.html")
+out_html = os.path.join(data_dir, "modkit_genome_tracks_line_only.html")
 fig.write_html(out_html)
 print(f"[DONE] Interactive figure saved: {out_html}")
