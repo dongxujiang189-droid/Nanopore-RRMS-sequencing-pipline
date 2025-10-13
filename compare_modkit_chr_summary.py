@@ -7,7 +7,6 @@ import numpy as np
 # ========= CONFIG =========
 data_dir = "/mnt/e/Data/seq_for_human_293t2/modkit"
 
-# Map sample names to exact files
 samples_files = {
     "barcode04": os.path.join(data_dir, "barcode04_aligned_with_mod.region_mh.stats.tsv"),
     "barcode05": os.path.join(data_dir, "barcode05_aligned_with_mod.region_mh.stats.tsv"),
@@ -17,13 +16,14 @@ samples_files = {
 
 chrom_order = [f"chr{i}" for i in range(1, 23)] + ["chrX", "chrY"]
 
-# Assign distinct colors per sample
 sample_colors = {
     "barcode04": "red",
     "barcode05": "green",
     "barcode06": "blue",
     "barcode07": "purple",
 }
+
+markers = {"barcode04": "o", "barcode05": "s", "barcode06": "^", "barcode07": "D"}
 
 # ========= LOAD DATA =========
 dfs = []
@@ -62,47 +62,61 @@ summary = (
     .reset_index()
 )
 
-# Ensure chromosome order
 summary["chrom"] = pd.Categorical(summary["chrom"], chrom_order, ordered=True)
 summary = summary.sort_values(["chrom", "sample"])
 
-# ========= PLOT SIDE-BY-SIDE =========
+# ========= PLOT LINE CHART =========
 plt.figure(figsize=(20, 6))
-n_samples = len(samples_files)
-bar_width = 0.35  # width for 5mC and 5hmC bars
-x = np.arange(len(chrom_order))  # positions for chromosomes
+x = np.arange(len(chrom_order))
 
-for i, bc in enumerate(samples_files.keys()):
+for bc in samples_files.keys():
     sub = summary[summary["sample"] == bc].set_index("chrom").reindex(chrom_order)
-    sub.fillna(0, inplace=True)  # fill missing with 0 for plotting
+    sub["sample"].fillna(bc, inplace=True)  # fill sample name
+    color = sample_colors[bc]
 
-    # Offset positions for each sample
-    offset = (i - n_samples/2) * bar_width
-    # Plot 5mC
-    plt.bar(
-        x + offset,
+    # Plot 5mC solid line
+    plt.plot(
+        x,
         sub["mean_5mC"],
-        width=bar_width / 2,
-        color=sample_colors[bc],
-        label=f"{bc} 5mC",
-        alpha=0.8
+        marker=markers[bc],
+        color=color,
+        linestyle='-',
+        linewidth=2,
+        alpha=0.8,
+        label=f"{bc} 5mC"
     )
-    # Plot 5hmC right next to 5mC
-    plt.bar(
-        x + offset + bar_width / 2,
+
+    # Plot 5hmC dashed line
+    plt.plot(
+        x,
         sub["mean_5hmC"],
-        width=bar_width / 2,
-        color=sample_colors[bc],
-        label=f"{bc} 5hmC",
-        alpha=0.4
+        marker=markers[bc],
+        color=color,
+        linestyle='--',
+        linewidth=2,
+        alpha=0.8,
+        label=f"{bc} 5hmC"
     )
+
+    # Annotate values
+    for xi, row in zip(x, sub.itertuples()):
+        if not pd.isna(row.mean_5mC):
+            plt.text(
+                xi, row.mean_5mC + 0.5, f"{row.mean_5mC:.1f}",
+                color=color, fontsize=7, ha="center", va="bottom"
+            )
+        if not pd.isna(row.mean_5hmC):
+            plt.text(
+                xi, row.mean_5hmC + 0.5, f"{row.mean_5hmC:.1f}",
+                color=color, fontsize=7, ha="center", va="bottom"
+            )
 
 plt.xticks(x, chrom_order, rotation=45)
 plt.ylabel("Average modification (%)")
-plt.title("Genome-wide average 5mC (solid) and 5hmC (lighter) per chromosome across samples")
+plt.title("Genome-wide 5mC (solid) and 5hmC (dashed) per chromosome across samples")
 plt.ylim(0, 100)
 
-# Deduplicate legend entries
+# Remove duplicate legend entries
 handles, labels = plt.gca().get_legend_handles_labels()
 by_label = dict(zip(labels, handles))
 plt.legend(by_label.values(), by_label.keys(), ncol=4, fontsize=10)
@@ -110,13 +124,9 @@ plt.legend(by_label.values(), by_label.keys(), ncol=4, fontsize=10)
 plt.tight_layout()
 
 # Save figure
-out_fig = os.path.join(data_dir, "modkit_genome_comparison_side_by_side.png")
+out_fig = os.path.join(data_dir, "modkit_genome_comparison_lines_color_samples.png")
 plt.savefig(out_fig, dpi=300)
 plt.close()
 
 # Save summary table
-out_tsv = os.path.join(data_dir, "modkit_genome_comparison_summary_side_by_side.tsv")
-summary.to_csv(out_tsv, sep="\t", index=False)
-
-print(f"[DONE] Figure saved: {out_fig}")
-print(f"[DONE] Summary table saved: {out_tsv}")
+out_t_
