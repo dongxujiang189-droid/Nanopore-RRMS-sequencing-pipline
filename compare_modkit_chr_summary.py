@@ -17,15 +17,13 @@ samples_files = {
 
 chrom_order = [f"chr{i}" for i in range(1, 23)] + ["chrX", "chrY"]
 
-# Assign unique colors per sample
+# Assign distinct colors per sample
 sample_colors = {
-    "barcode04": "#1f77b4",  # blue
-    "barcode05": "#ff7f0e",  # orange
-    "barcode06": "#2ca02c",  # green
-    "barcode07": "#d62728",  # red
+    "barcode04": "red",
+    "barcode05": "green",
+    "barcode06": "blue",
+    "barcode07": "purple",
 }
-
-markers = {"barcode04": "o", "barcode05": "s", "barcode06": "^", "barcode07": "D"}
 
 # ========= LOAD DATA =========
 dfs = []
@@ -37,19 +35,16 @@ for bc, f in samples_files.items():
     df = pd.read_csv(f, sep="\t")
     df.columns = [c.strip() for c in df.columns]
 
-    # Rename #chrom to chrom
     if "#chrom" in df.columns:
         df = df.rename(columns={"#chrom": "chrom"})
     else:
         print(f"[ERROR] {f} missing '#chrom' column")
         continue
 
-    # Ensure percent_m and percent_h exist
     if "percent_m" not in df.columns or "percent_h" not in df.columns:
         print(f"[ERROR] {f} missing 'percent_m' or 'percent_h' column")
         continue
 
-    # Keep only desired chromosomes
     df = df[df["chrom"].isin(chrom_order)]
     df["sample"] = bc
     dfs.append(df)
@@ -68,84 +63,59 @@ summary = (
 )
 
 # Ensure chromosome order
-summary["chrom_num"] = pd.Categorical(summary["chrom"], chrom_order, ordered=True)
-summary = summary.sort_values(["chrom_num", "sample"])
+summary["chrom"] = pd.Categorical(summary["chrom"], chrom_order, ordered=True)
+summary = summary.sort_values(["chrom", "sample"])
 
-# ========= PLOT =========
-plt.figure(figsize=(18, 6))
-x = np.arange(len(chrom_order))  # 0..23 for 24 chromosomes
+# ========= PLOT SIDE-BY-SIDE =========
+plt.figure(figsize=(20, 6))
+n_samples = len(samples_files)
+bar_width = 0.35  # width for 5mC and 5hmC bars
+x = np.arange(len(chrom_order))  # positions for chromosomes
 
-for bc in samples_files.keys():
-    sub = summary[summary["sample"] == bc]
-    if sub.empty:
-        continue
+for i, bc in enumerate(samples_files.keys()):
+    sub = summary[summary["sample"] == bc].set_index("chrom").reindex(chrom_order)
+    sub.fillna(0, inplace=True)  # fill missing with 0 for plotting
 
-    # Align chromosomes to x-axis positions, fill missing with NaN
-    sub = sub.set_index("chrom").reindex(chrom_order).reset_index()
-    sub["sample"].fillna(bc, inplace=True)
-
-    color = sample_colors[bc]
-
-    # Plot 5mC line
-    plt.plot(
-        x,
+    # Offset positions for each sample
+    offset = (i - n_samples/2) * bar_width
+    # Plot 5mC
+    plt.bar(
+        x + offset,
         sub["mean_5mC"],
-        marker=markers[bc],
-        color=color,
+        width=bar_width / 2,
+        color=sample_colors[bc],
         label=f"{bc} 5mC",
-        linewidth=2,
-        alpha=0.7
+        alpha=0.8
     )
-
-    # Plot 5hmC line with dashed style
-    plt.plot(
-        x,
+    # Plot 5hmC right next to 5mC
+    plt.bar(
+        x + offset + bar_width / 2,
         sub["mean_5hmC"],
-        marker=markers[bc],
-        color=color,
-        linestyle='--',
+        width=bar_width / 2,
+        color=sample_colors[bc],
         label=f"{bc} 5hmC",
-        linewidth=2,
-        alpha=0.7
+        alpha=0.4
     )
-
-    # Annotate points (skip NaN)
-    for xi, row in zip(x, sub.itertuples()):
-        if not np.isnan(row.mean_5mC):
-            plt.text(
-                xi,
-                row.mean_5mC + 0.5,
-                f"{row.mean_5mC:.1f}",
-                color=color,
-                fontsize=7,
-                ha="center",
-                va="bottom"
-            )
-        if not np.isnan(row.mean_5hmC):
-            plt.text(
-                xi,
-                row.mean_5hmC + 0.5,
-                f"{row.mean_5hmC:.1f}",
-                color=color,
-                fontsize=7,
-                ha="center",
-                va="bottom"
-            )
 
 plt.xticks(x, chrom_order, rotation=45)
 plt.ylabel("Average modification (%)")
-plt.title("Genome-wide average 5mC (solid) and 5hmC (dashed) per chromosome across samples")
+plt.title("Genome-wide average 5mC (solid) and 5hmC (lighter) per chromosome across samples")
 plt.ylim(0, 100)
-plt.legend(ncol=4, fontsize=10)
+
+# Deduplicate legend entries
+handles, labels = plt.gca().get_legend_handles_labels()
+by_label = dict(zip(labels, handles))
+plt.legend(by_label.values(), by_label.keys(), ncol=4, fontsize=10)
+
 plt.tight_layout()
 
 # Save figure
-out_fig = os.path.join(data_dir, "modkit_genome_comparison_lines_color_by_sample.png")
+out_fig = os.path.join(data_dir, "modkit_genome_comparison_side_by_side.png")
 plt.savefig(out_fig, dpi=300)
 plt.close()
 
 # Save summary table
-out_tsv = os.path.join(data_dir, "modkit_genome_comparison_summary_color_by_sample.tsv")
+out_tsv = os.path.join(data_dir, "modkit_genome_comparison_summary_side_by_side.tsv")
 summary.to_csv(out_tsv, sep="\t", index=False)
 
 print(f"[DONE] Figure saved: {out_fig}")
