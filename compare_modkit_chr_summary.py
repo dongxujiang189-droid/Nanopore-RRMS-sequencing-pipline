@@ -6,7 +6,15 @@ import numpy as np
 
 # ========= CONFIG =========
 data_dir = "/mnt/e/Data/seq_for_human_293t2/modkit"
-samples = ["barcode04", "barcode05", "barcode06", "barcode07"]
+
+# Mapping sample names to exact files
+samples_files = {
+    "barcode04": os.path.join(data_dir, "barcode04_aligned_with_mod.region_mh.stats.tsv"),
+    "barcode05": os.path.join(data_dir, "barcode05_aligned_with_mod.region_mh.stats.tsv"),
+    "barcode06": os.path.join(data_dir, "barcode06_aligned_with_mod.region_mh.stats.tsv"),
+    "barcode07": os.path.join(data_dir, "barcode07_aligned_with_mod.region_mh.stats.tsv"),
+}
+
 chrom_order = [f"chr{i}" for i in range(1, 23)] + ["chrX", "chrY"]
 
 colors = {"percent_m": "red", "percent_h": "blue"}
@@ -14,8 +22,7 @@ markers = {"barcode04": "o", "barcode05": "s", "barcode06": "^", "barcode07": "D
 
 # ========= LOAD DATA =========
 dfs = []
-for bc in samples:
-    f = os.path.join(data_dir, f"{bc}_aligned_with_mod.region_mh.stats.tsv")
+for bc, f in samples_files.items():
     if not os.path.exists(f):
         print(f"[WARN] missing: {f}")
         continue
@@ -23,6 +30,7 @@ for bc in samples:
     df = pd.read_csv(f, sep="\t")
     df.columns = [c.strip() for c in df.columns]
 
+    # Rename #chrom to chrom
     if "#chrom" in df.columns:
         df = df.rename(columns={"#chrom": "chrom"})
     else:
@@ -33,6 +41,7 @@ for bc in samples:
         print(f"[ERROR] {f} missing 'percent_m' or 'percent_h' column")
         continue
 
+    # Keep only desired chromosomes
     df = df[df["chrom"].isin(chrom_order)]
     df["sample"] = bc
     dfs.append(df)
@@ -50,7 +59,7 @@ summary = (
     .reset_index()
 )
 
-# Ensure proper chromosome order
+# Sort chromosomes
 summary["chrom_num"] = pd.Categorical(summary["chrom"], chrom_order, ordered=True)
 summary = summary.sort_values(["chrom_num", "sample"])
 
@@ -58,12 +67,12 @@ summary = summary.sort_values(["chrom_num", "sample"])
 plt.figure(figsize=(18, 6))
 x = np.arange(len(chrom_order))
 
-for bc in samples:
+for bc in samples_files.keys():
     sub = summary[summary["sample"] == bc]
     if sub.empty:
         continue
 
-    # Plot 5mC line with markers
+    # Plot 5mC line
     plt.plot(
         x,
         sub["mean_5mC"],
@@ -73,7 +82,7 @@ for bc in samples:
         linewidth=2,
         alpha=0.7
     )
-    # Plot 5hmC line with markers
+    # Plot 5hmC line
     plt.plot(
         x,
         sub["mean_5hmC"],
@@ -84,41 +93,42 @@ for bc in samples:
         alpha=0.7
     )
 
-    # Annotate each point with value
+    # Annotate points
     for i, row in sub.iterrows():
         plt.text(
             x[i],
-            row["mean_5mC"] + 1,
+            row["mean_5mC"] + 0.5,
             f"{row['mean_5mC']:.1f}",
             color=colors["percent_m"],
-            fontsize=8,
+            fontsize=7,
             ha="center",
             va="bottom"
         )
         plt.text(
             x[i],
-            row["mean_5hmC"] + 1,
+            row["mean_5hmC"] + 0.5,
             f"{row['mean_5hmC']:.1f}",
             color=colors["percent_h"],
-            fontsize=8,
+            fontsize=7,
             ha="center",
             va="bottom"
         )
 
 plt.xticks(x, chrom_order, rotation=45)
 plt.ylabel("Average modification (%)")
-plt.title("Average 5mC (red) and 5hmC (blue) levels per chromosome across samples")
+plt.title("Genome-wide average 5mC (red) and 5hmC (blue) per chromosome across samples")
 plt.ylim(0, 100)
 plt.legend(ncol=4, fontsize=10)
 plt.tight_layout()
 
-out_fig = os.path.join(data_dir, "modkit_chr_comparison_lines.png")
+out_fig = os.path.join(data_dir, "modkit_genome_comparison_lines.png")
 plt.savefig(out_fig, dpi=300)
 plt.close()
 
 # ========= OUTPUT SUMMARY =========
-out_tsv = os.path.join(data_dir, "modkit_chr_comparison_summary.tsv")
+out_tsv = os.path.join(data_dir, "modkit_genome_comparison_summary.tsv")
 summary.to_csv(out_tsv, sep="\t", index=False)
 
 print(f"[DONE] Figure saved: {out_fig}")
 print(f"[DONE] Summary table saved: {out_tsv}")
+
