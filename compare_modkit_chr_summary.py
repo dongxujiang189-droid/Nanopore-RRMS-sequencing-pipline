@@ -73,7 +73,7 @@ for bc in samples_files.keys():
     if sub.empty:
         continue
 
-    # Align chromosomes to x positions
+    # Align chromosomes to x-axis positions
     sub = sub.set_index("chrom").reindex(chrom_order).reset_index()
 
     # Plot 5mC line
@@ -86,6 +86,7 @@ for bc in samples_files.keys():
         linewidth=2,
         alpha=0.7
     )
+
     # Plot 5hmC line
     plt.plot(
         x,
@@ -97,7 +98,7 @@ for bc in samples_files.keys():
         alpha=0.7
     )
 
-    # Annotate points with values
+    # Annotate points
     for xi, row in zip(x, sub.itertuples()):
         plt.text(
             xi,
@@ -117,7 +118,6 @@ for bc in samples_files.keys():
             ha="center",
             va="bottom"
         )
-
 plt.xticks(x, chrom_order, rotation=45)
 plt.ylabel("Average modification (%)")
 plt.title("Genome-wide average 5mC (red) and 5hmC (blue) per chromosome across samples")
