@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 # ========= CONFIG =========
-# WSL-compatible path
+# Use Linux-style path for WSL
 data_dir = "/mnt/e/Data/seq_for_human_293t2/modkit"
 samples = ["barcode04", "barcode05", "barcode06", "barcode07"]
 chrom_order = [f"chr{i}" for i in range(1, 23)] + ["chrX", "chrY"]
@@ -19,30 +19,22 @@ for bc in samples:
         continue
 
     df = pd.read_csv(f, sep="\t")
-    df.columns = [c.strip() for c in df.columns]  # clean column names
+    df.columns = [c.strip() for c in df.columns]  # remove extra spaces
 
-    # Detect possible chromosome column
-    chrom_col = None
-    for c in df.columns:
-        if c.lower() in ["chrom", "chromosome", "ref_name", "contig", "chr"]:
-            chrom_col = c
-            break
-    if chrom_col is None:
-        print(f"[ERROR] Could not find chromosome column in {f}")
-        print(f"        Available columns: {list(df.columns)}")
+    # Rename #chrom to chrom
+    if "#chrom" in df.columns:
+        df = df.rename(columns={"#chrom": "chrom"})
+    else:
+        print(f"[ERROR] {f} does not have '#chrom' column")
         continue
 
-    # Detect percent methylation/hydroxymethylation columns
-    m_col = next((c for c in df.columns if "percent_m" in c.lower()), None)
-    h_col = next((c for c in df.columns if "percent_h" in c.lower()), None)
-
-    if not m_col or not h_col:
-        print(f"[WARN] Missing expected 'percent_m' or 'percent_h' in {f}")
-        print(f"       Columns found: {list(df.columns)}")
+    # Ensure percent_m and percent_h exist
+    if "percent_m" not in df.columns or "percent_h" not in df.columns:
+        print(f"[ERROR] {f} missing 'percent_m' or 'percent_h' columns")
         continue
 
-    df = df[df[chrom_col].isin(chrom_order)]
-    df = df.rename(columns={chrom_col: "chrom", m_col: "percent_m", h_col: "percent_h"})
+    # Keep only desired chromosomes
+    df = df[df["chrom"].isin(chrom_order)]
     df["sample"] = bc
     dfs.append(df)
 
@@ -59,7 +51,7 @@ summary = (
     .reset_index()
 )
 
-# Sort chromosomes
+# sort chromosomes
 summary["chrom_num"] = pd.Categorical(summary["chrom"], chrom_order, ordered=True)
 summary = summary.sort_values(["chrom_num", "sample"])
 
@@ -67,7 +59,7 @@ summary = summary.sort_values(["chrom_num", "sample"])
 plt.figure(figsize=(16, 6))
 chroms = summary["chrom"].unique()
 x = np.arange(len(chroms))
-width = 0.18
+width = 0.18  # bar width
 
 for i, bc in enumerate(samples):
     sub = summary[summary["sample"] == bc]
@@ -94,3 +86,4 @@ summary.to_csv(out_tsv, sep="\t", index=False)
 
 print(f"[DONE] Figure saved: {out_fig}")
 print(f"[DONE] Summary table saved: {out_tsv}")
+
