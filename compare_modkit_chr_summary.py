@@ -17,7 +17,14 @@ samples_files = {
 
 chrom_order = [f"chr{i}" for i in range(1, 23)] + ["chrX", "chrY"]
 
-colors = {"percent_m": "red", "percent_h": "blue"}
+# Assign unique colors per sample
+sample_colors = {
+    "barcode04": "#1f77b4",  # blue
+    "barcode05": "#ff7f0e",  # orange
+    "barcode06": "#2ca02c",  # green
+    "barcode07": "#d62728",  # red
+}
+
 markers = {"barcode04": "o", "barcode05": "s", "barcode06": "^", "barcode07": "D"}
 
 # ========= LOAD DATA =========
@@ -75,25 +82,28 @@ for bc in samples_files.keys():
 
     # Align chromosomes to x-axis positions, fill missing with NaN
     sub = sub.set_index("chrom").reindex(chrom_order).reset_index()
-    sub["sample"].fillna(bc, inplace=True)  # fill missing sample names
+    sub["sample"].fillna(bc, inplace=True)
+
+    color = sample_colors[bc]
 
     # Plot 5mC line
     plt.plot(
         x,
         sub["mean_5mC"],
         marker=markers[bc],
-        color=colors["percent_m"],
+        color=color,
         label=f"{bc} 5mC",
         linewidth=2,
         alpha=0.7
     )
 
-    # Plot 5hmC line
+    # Plot 5hmC line with dashed style
     plt.plot(
         x,
         sub["mean_5hmC"],
         marker=markers[bc],
-        color=colors["percent_h"],
+        color=color,
+        linestyle='--',
         label=f"{bc} 5hmC",
         linewidth=2,
         alpha=0.7
@@ -106,7 +116,7 @@ for bc in samples_files.keys():
                 xi,
                 row.mean_5mC + 0.5,
                 f"{row.mean_5mC:.1f}",
-                color=colors["percent_m"],
+                color=color,
                 fontsize=7,
                 ha="center",
                 va="bottom"
@@ -116,7 +126,7 @@ for bc in samples_files.keys():
                 xi,
                 row.mean_5hmC + 0.5,
                 f"{row.mean_5hmC:.1f}",
-                color=colors["percent_h"],
+                color=color,
                 fontsize=7,
                 ha="center",
                 va="bottom"
@@ -124,18 +134,18 @@ for bc in samples_files.keys():
 
 plt.xticks(x, chrom_order, rotation=45)
 plt.ylabel("Average modification (%)")
-plt.title("Genome-wide average 5mC (red) and 5hmC (blue) per chromosome across samples")
+plt.title("Genome-wide average 5mC (solid) and 5hmC (dashed) per chromosome across samples")
 plt.ylim(0, 100)
 plt.legend(ncol=4, fontsize=10)
 plt.tight_layout()
 
 # Save figure
-out_fig = os.path.join(data_dir, "modkit_genome_comparison_lines_fixed.png")
+out_fig = os.path.join(data_dir, "modkit_genome_comparison_lines_color_by_sample.png")
 plt.savefig(out_fig, dpi=300)
 plt.close()
 
 # Save summary table
-out_tsv = os.path.join(data_dir, "modkit_genome_comparison_summary_fixed.tsv")
+out_tsv = os.path.join(data_dir, "modkit_genome_comparison_summary_color_by_sample.tsv")
 summary.to_csv(out_tsv, sep="\t", index=False)
 
 print(f"[DONE] Figure saved: {out_fig}")
