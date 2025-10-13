@@ -73,8 +73,9 @@ for bc in samples_files.keys():
     if sub.empty:
         continue
 
-    # Align chromosomes to x-axis positions
+    # Align chromosomes to x-axis positions, fill missing with NaN
     sub = sub.set_index("chrom").reindex(chrom_order).reset_index()
+    sub["sample"].fillna(bc, inplace=True)  # fill missing sample names
 
     # Plot 5mC line
     plt.plot(
@@ -98,26 +99,29 @@ for bc in samples_files.keys():
         alpha=0.7
     )
 
-    # Annotate points
+    # Annotate points (skip NaN)
     for xi, row in zip(x, sub.itertuples()):
-        plt.text(
-            xi,
-            row.mean_5mC + 0.5,
-            f"{row.mean_5mC:.1f}",
-            color=colors["percent_m"],
-            fontsize=7,
-            ha="center",
-            va="bottom"
-        )
-        plt.text(
-            xi,
-            row.mean_5hmC + 0.5,
-            f"{row.mean_5hmC:.1f}",
-            color=colors["percent_h"],
-            fontsize=7,
-            ha="center",
-            va="bottom"
-        )
+        if not np.isnan(row.mean_5mC):
+            plt.text(
+                xi,
+                row.mean_5mC + 0.5,
+                f"{row.mean_5mC:.1f}",
+                color=colors["percent_m"],
+                fontsize=7,
+                ha="center",
+                va="bottom"
+            )
+        if not np.isnan(row.mean_5hmC):
+            plt.text(
+                xi,
+                row.mean_5hmC + 0.5,
+                f"{row.mean_5hmC:.1f}",
+                color=colors["percent_h"],
+                fontsize=7,
+                ha="center",
+                va="bottom"
+            )
+
 plt.xticks(x, chrom_order, rotation=45)
 plt.ylabel("Average modification (%)")
 plt.title("Genome-wide average 5mC (red) and 5hmC (blue) per chromosome across samples")
