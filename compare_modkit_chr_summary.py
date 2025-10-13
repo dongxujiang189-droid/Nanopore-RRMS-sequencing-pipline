@@ -6,7 +6,7 @@ import numpy as np
 
 # ========= CONFIG =========
 # Use Linux-style path for WSL
-data_dir = "/mnt/e/EPI2ME/modkit"
+data_dir = "/mnt/e/Data/seq_for_human_293t2/modkit"
 samples = ["barcode04", "barcode05", "barcode06", "barcode07"]
 chrom_order = [f"chr{i}" for i in range(1, 23)] + ["chrX", "chrY"]
 
