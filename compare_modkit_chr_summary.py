@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 # ========= CONFIG =========
-# Use Linux-style path for WSL
+# WSL-compatible path
 data_dir = "/mnt/e/Data/seq_for_human_293t2/modkit"
 samples = ["barcode04", "barcode05", "barcode06", "barcode07"]
 chrom_order = [f"chr{i}" for i in range(1, 23)] + ["chrX", "chrY"]
@@ -17,8 +17,32 @@ for bc in samples:
     if not os.path.exists(f):
         print(f"[WARN] missing: {f}")
         continue
+
     df = pd.read_csv(f, sep="\t")
-    df = df[df["chrom"].isin(chrom_order)]
+    df.columns = [c.strip() for c in df.columns]  # clean column names
+
+    # Detect possible chromosome column
+    chrom_col = None
+    for c in df.columns:
+        if c.lower() in ["chrom", "chromosome", "ref_name", "contig", "chr"]:
+            chrom_col = c
+            break
+    if chrom_col is None:
+        print(f"[ERROR] Could not find chromosome column in {f}")
+        print(f"        Available columns: {list(df.columns)}")
+        continue
+
+    # Detect percent methylation/hydroxymethylation columns
+    m_col = next((c for c in df.columns if "percent_m" in c.lower()), None)
+    h_col = next((c for c in df.columns if "percent_h" in c.lower()), None)
+
+    if not m_col or not h_col:
+        print(f"[WARN] Missing expected 'percent_m' or 'percent_h' in {f}")
+        print(f"       Columns found: {list(df.columns)}")
+        continue
+
+    df = df[df[chrom_col].isin(chrom_order)]
+    df = df.rename(columns={chrom_col: "chrom", m_col: "percent_m", h_col: "percent_h"})
     df["sample"] = bc
     dfs.append(df)
 
@@ -26,7 +50,7 @@ if not dfs:
     raise SystemExit("[FATAL] No valid input files found!")
 
 df_all = pd.concat(dfs, ignore_index=True)
-print(f"[INFO] Loaded {len(df_all):,} rows total")
+print(f"[INFO] Loaded {len(df_all):,} rows total from {len(dfs)} samples")
 
 # ========= SUMMARY =========
 summary = (
@@ -35,22 +59,21 @@ summary = (
     .reset_index()
 )
 
-# sort by chromosome order
+# Sort chromosomes
 summary["chrom_num"] = pd.Categorical(summary["chrom"], chrom_order, ordered=True)
 summary = summary.sort_values(["chrom_num", "sample"])
 
 # ========= PLOT =========
 plt.figure(figsize=(16, 6))
-
 chroms = summary["chrom"].unique()
 x = np.arange(len(chroms))
-width = 0.18  # bar width
+width = 0.18
 
 for i, bc in enumerate(samples):
     sub = summary[summary["sample"] == bc]
     if sub.empty:
         continue
-    offset = (i - (len(samples)-1)/2) * (width*2)
+    offset = (i - (len(samples) - 1) / 2) * (width * 2)
     plt.bar(x + offset, sub["mean_5mC"], width=width, color="red", alpha=0.5, label=f"{bc} 5mC" if i == 0 else "")
     plt.bar(x + offset, sub["mean_5hmC"], width=width, color="blue", alpha=0.5, label=f"{bc} 5hmC" if i == 0 else "")
 
