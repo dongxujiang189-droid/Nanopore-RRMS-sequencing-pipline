@@ -7,7 +7,7 @@ import numpy as np
 # ========= CONFIG =========
 data_dir = "/mnt/e/Data/seq_for_human_293t2/modkit"
 
-# Mapping sample names to exact files
+# Map sample names to exact files
 samples_files = {
     "barcode04": os.path.join(data_dir, "barcode04_aligned_with_mod.region_mh.stats.tsv"),
     "barcode05": os.path.join(data_dir, "barcode05_aligned_with_mod.region_mh.stats.tsv"),
@@ -37,6 +37,7 @@ for bc, f in samples_files.items():
         print(f"[ERROR] {f} missing '#chrom' column")
         continue
 
+    # Ensure percent_m and percent_h exist
     if "percent_m" not in df.columns or "percent_h" not in df.columns:
         print(f"[ERROR] {f} missing 'percent_m' or 'percent_h' column")
         continue
@@ -59,18 +60,21 @@ summary = (
     .reset_index()
 )
 
-# Sort chromosomes
+# Ensure chromosome order
 summary["chrom_num"] = pd.Categorical(summary["chrom"], chrom_order, ordered=True)
 summary = summary.sort_values(["chrom_num", "sample"])
 
 # ========= PLOT =========
 plt.figure(figsize=(18, 6))
-x = np.arange(len(chrom_order))
+x = np.arange(len(chrom_order))  # 0..23 for 24 chromosomes
 
 for bc in samples_files.keys():
     sub = summary[summary["sample"] == bc]
     if sub.empty:
         continue
+
+    # Align chromosomes to x positions
+    sub = sub.set_index("chrom").reindex(chrom_order).reset_index()
 
     # Plot 5mC line
     plt.plot(
@@ -93,21 +97,21 @@ for bc in samples_files.keys():
         alpha=0.7
     )
 
-    # Annotate points
-    for i, row in sub.iterrows():
+    # Annotate points with values
+    for xi, row in zip(x, sub.itertuples()):
         plt.text(
-            x[i],
-            row["mean_5mC"] + 0.5,
-            f"{row['mean_5mC']:.1f}",
+            xi,
+            row.mean_5mC + 0.5,
+            f"{row.mean_5mC:.1f}",
             color=colors["percent_m"],
             fontsize=7,
             ha="center",
             va="bottom"
         )
         plt.text(
-            x[i],
-            row["mean_5hmC"] + 0.5,
-            f"{row['mean_5hmC']:.1f}",
+            xi,
+            row.mean_5hmC + 0.5,
+            f"{row.mean_5hmC:.1f}",
             color=colors["percent_h"],
             fontsize=7,
             ha="center",
@@ -121,14 +125,14 @@ plt.ylim(0, 100)
 plt.legend(ncol=4, fontsize=10)
 plt.tight_layout()
 
-out_fig = os.path.join(data_dir, "modkit_genome_comparison_lines.png")
+# Save figure
+out_fig = os.path.join(data_dir, "modkit_genome_comparison_lines_fixed.png")
 plt.savefig(out_fig, dpi=300)
 plt.close()
 
-# ========= OUTPUT SUMMARY =========
-out_tsv = os.path.join(data_dir, "modkit_genome_comparison_summary.tsv")
+# Save summary table
+out_tsv = os.path.join(data_dir, "modkit_genome_comparison_summary_fixed.tsv")
 summary.to_csv(out_tsv, sep="\t", index=False)
 
 print(f"[DONE] Figure saved: {out_fig}")
 print(f"[DONE] Summary table saved: {out_tsv}")
-
