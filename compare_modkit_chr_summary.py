@@ -5,7 +5,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 # ========= CONFIG =========
-data_dir = r"E:\EPI2ME\modkit"
+# Use Linux-style path for WSL
+data_dir = "/mnt/e/EPI2ME/modkit"
 samples = ["barcode04", "barcode05", "barcode06", "barcode07"]
 chrom_order = [f"chr{i}" for i in range(1, 23)] + ["chrX", "chrY"]
 
@@ -38,23 +39,20 @@ summary = (
 summary["chrom_num"] = pd.Categorical(summary["chrom"], chrom_order, ordered=True)
 summary = summary.sort_values(["chrom_num", "sample"])
 
-# ========= PLOT (single figure) =========
+# ========= PLOT =========
 plt.figure(figsize=(16, 6))
 
 chroms = summary["chrom"].unique()
 x = np.arange(len(chroms))
-width = 0.18  # spacing between bars per sample
+width = 0.18  # bar width
 
 for i, bc in enumerate(samples):
     sub = summary[summary["sample"] == bc]
     if sub.empty:
         continue
-
-    # bar positions for this sample
     offset = (i - (len(samples)-1)/2) * (width*2)
-
-    plt.bar(x + offset, sub["mean_5mC"], width=width, color="red", alpha=0.4, label=f"{bc} 5mC" if i == 0 else "")
-    plt.bar(x + offset, sub["mean_5hmC"], width=width, color="blue", alpha=0.4, label=f"{bc} 5hmC" if i == 0 else "")
+    plt.bar(x + offset, sub["mean_5mC"], width=width, color="red", alpha=0.5, label=f"{bc} 5mC" if i == 0 else "")
+    plt.bar(x + offset, sub["mean_5hmC"], width=width, color="blue", alpha=0.5, label=f"{bc} 5hmC" if i == 0 else "")
 
 plt.xticks(x, chroms, rotation=45)
 plt.ylabel("Average modification (%)")
