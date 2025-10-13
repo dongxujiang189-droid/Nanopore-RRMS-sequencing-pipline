@@ -14,10 +14,10 @@ samples_files = {
     "barcode07": os.path.join(data_dir, "barcode07_aligned_with_mod.region_mh.stats.tsv"),
 }
 
-# Only autosomes for clarity
-chrom_order = [f"chr{i}" for i in range(1, 24)]  # chr1 to chr23
+# Only chr1, chrX, chrY
+chrom_order = ["chr1", "chrX", "chrY"]
 
-# Assign distinct colors per sample
+# Colors per sample
 sample_colors = {
     "barcode04": "red",
     "barcode05": "green",
@@ -67,62 +67,70 @@ summary = (
 summary["chrom"] = pd.Categorical(summary["chrom"], chrom_order, ordered=True)
 summary = summary.sort_values(["chrom", "sample"])
 
-# ========= PLOT LINE CHART =========
-plt.figure(figsize=(18, 6))
-x = np.arange(len(chrom_order))  # positions along chromosomes
+x = np.arange(len(chrom_order))  # positions for chromosomes
 
+# ========= PLOT 5mC =========
+plt.figure(figsize=(10, 5))
 for bc in samples_files.keys():
     sub = summary[summary["sample"] == bc].set_index("chrom").reindex(chrom_order)
-    sub.fillna(0, inplace=True)
-    color = sample_colors[bc]
-
-    # Plot 5mC solid line
+    sub.fillna(0.01, inplace=True)  # small value to avoid log(0)
     plt.plot(
         x, sub["mean_5mC"],
-        color=color,
+        color=sample_colors[bc],
         marker=markers[bc],
         linestyle='-',
         linewidth=2,
         alpha=0.8,
-        label=f"{bc} 5mC"
+        label=bc
     )
 
-    # Plot 5hmC dashed line
-    plt.plot(
-        x, sub["mean_5hmC"],
-        color=color,
-        marker=markers[bc],
-        linestyle='--',
-        linewidth=2,
-        alpha=0.8,
-        label=f"{bc} 5hmC"
-    )
-
-# Optional: add horizontal grid lines
+plt.xticks(x, chrom_order)
+plt.ylabel("Average 5mC (%) (log scale)")
+plt.xlabel("Chromosome")
+plt.title("5mC levels per sample across chr1, X, Y")
+plt.yscale('log')
 plt.grid(axis='y', linestyle=':', alpha=0.5)
 
-plt.xticks(x, chrom_order, rotation=45)
-plt.ylabel("Average modification (%)")
-plt.xlabel("Chromosome")
-plt.title("Genome-wide 5mC (solid) and 5hmC (dashed) levels per chromosome (chr1-23)")
-
-plt.ylim(0, 100)
-
-# Clean legend without duplicates
-handles, labels = plt.gca().get_legend_handles_labels()
-by_label = dict(zip(labels, handles))
-plt.legend(by_label.values(), by_label.keys(), ncol=4, fontsize=10)
-
+plt.legend(ncol=2, fontsize=10)
 plt.tight_layout()
 
-# Save figure
-out_fig = os.path.join(data_dir, "modkit_genome_comparison_lines_chr1_23.png")
-plt.savefig(out_fig, dpi=300)
+out_fig_mC = os.path.join(data_dir, "modkit_5mC_log_chr1_X_Y.png")
+plt.savefig(out_fig_mC, dpi=300)
 plt.close()
+print(f"[DONE] 5mC figure saved: {out_fig_mC}")
 
-# Save summary table
-out_tsv = os.path.join(data_dir, "modkit_genome_comparison_summary_chr1_23.tsv")
+# ========= PLOT 5hmC =========
+plt.figure(figsize=(10, 5))
+for bc in samples_files.keys():
+    sub = summary[summary["sample"] == bc].set_index("chrom").reindex(chrom_order)
+    sub.fillna(0.01, inplace=True)
+    plt.plot(
+        x, sub["mean_5hmC"],
+        color=sample_colors[bc],
+        marker=markers[bc],
+        linestyle='-',
+        linewidth=2,
+        alpha=0.8,
+        label=bc
+    )
+
+plt.xticks(x, chrom_order)
+plt.ylabel("Average 5hmC (%) (log scale)")
+plt.xlabel("Chromosome")
+plt.title("5hmC levels per sample across chr1, X, Y")
+plt.yscale('log')
+plt.grid(axis='y', linestyle=':', alpha=0.5)
+
+plt.legend(ncol=2, fontsize=10)
+plt.tight_layout()
+
+out_fig_hmC = os.path.join(data_dir, "modkit_5hmC_log_chr1_X_Y.png")
+plt.savefig(out_fig_hmC, dpi=300)
+plt.close()
+print(f"[DONE] 5hmC figure saved: {out_fig_hmC}")
+
+# ========= SAVE SUMMARY =========
+out_tsv = os.path.join(data_dir, "modkit_summary_chr1_X_Y.tsv")
 summary.to_csv(out_tsv, sep="\t", index=False)
-
-print(f"[DONE] Figure saved: {out_fig}")
 print(f"[DONE] Summary table saved: {out_tsv}")
+
