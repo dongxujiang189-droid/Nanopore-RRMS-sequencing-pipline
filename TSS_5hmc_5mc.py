@@ -76,7 +76,7 @@ for sample_file in sample_files:
     tss_regions = []
     for _, tss_row in tqdm(tss_df.iterrows(), total=len(tss_df), desc="Filtering TSS regions"):
         region = meth_df[
-            (meth_df['chrom'] == tss_row['chrom']) &
+            (meth_df['#chrom'] == tss_row['#chrom']) &
             (meth_df['start'] >= tss_row['start']) &
             (meth_df['end'] <= tss_row['end'])
         ].copy()
