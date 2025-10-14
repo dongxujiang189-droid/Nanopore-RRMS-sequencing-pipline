@@ -12,7 +12,7 @@ import glob
 # Configuration
 # -------------------
 base_dir = "/mnt/e/Data/seq_for_human_293t2/"
-input_pattern = os.path.join(base_dir, "*_aligned_with_mod.region_mh.stats.tsv")
+input_pattern = os.path.join(base_dir, "modkit", "*_aligned_with_mod.region_mh.stats.tsv")
 gtf_file = "/mnt/e/annotations/Homo_sapiens.GRCh38.gtf"
 out_dir = os.path.join(base_dir, "tss_methylation")
 os.makedirs(out_dir, exist_ok=True)
