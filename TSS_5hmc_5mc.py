@@ -125,11 +125,11 @@ for sample_file in sample_files:
         if chrom not in meth_by_chrom:
             continue
         
-        # Filter region
+        # Filter region - ANY overlap (not just completely inside)
         chrom_data = meth_by_chrom[chrom]
         region = chrom_data[
-            (chrom_data['start'] >= tss_row['start']) &
-            (chrom_data['end'] <= tss_row['end'])
+            (chrom_data['end'] > tss_row['start']) &
+            (chrom_data['start'] < tss_row['end'])
         ].copy()
         
         if len(region) > 0:
