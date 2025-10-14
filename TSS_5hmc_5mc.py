@@ -3,7 +3,6 @@ import os
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import seaborn as sns
 from tqdm import tqdm
 from collections import defaultdict
 import glob
@@ -22,6 +21,22 @@ window_size = 2000  # ±2kb around TSS
 bin_size = 100
 bins = range(-window_size, window_size + bin_size, bin_size)
 bin_centers = [(bins[i] + bins[i+1]) / 2 for i in range(len(bins)-1)]
+
+# -------------------
+# Helper function to normalize chromosome names
+# -------------------
+def normalize_chrom(chrom):
+    """Remove 'chr' prefix if present"""
+    if isinstance(chrom, str) and chrom.startswith('chr'):
+        return chrom[3:]
+    return str(chrom)
+
+def add_chr_prefix(chrom):
+    """Add 'chr' prefix if not present"""
+    chrom_str = str(chrom)
+    if not chrom_str.startswith('chr'):
+        return 'chr' + chrom_str
+    return chrom_str
 
 # -------------------
 # Extract TSS from GTF
@@ -52,6 +67,7 @@ with open(gtf_file, 'r') as f:
 
 tss_df = pd.DataFrame(tss_list)
 print(f"Found {len(tss_df)} genes")
+print(f"GTF chromosome examples: {tss_df['chrom'].unique()[:5]}")
 
 # -------------------
 # Process all samples
@@ -67,24 +83,54 @@ all_averages = []
 
 for sample_file in sample_files:
     sample_name = os.path.basename(sample_file).replace("_aligned_with_mod.region_mh.stats.tsv", "")
-    print(f"\nProcessing {sample_name}...")
+    print(f"\n{'='*60}")
+    print(f"Processing {sample_name}...")
     
     # Read data
     meth_df = pd.read_csv(sample_file, sep='\t')
-    # Rename column if it starts with #
     if '#chrom' in meth_df.columns:
         meth_df.rename(columns={'#chrom': 'chrom'}, inplace=True)
     
-    # Filter data within ±2kb of any TSS
+    print(f"Loaded {len(meth_df)} methylation sites")
+    print(f"TSV chromosome examples: {meth_df['chrom'].unique()[:5]}")
+    
+    # Check chromosome format mismatch and fix
+    sample_has_chr = meth_df['chrom'].iloc[0].startswith('chr') if len(meth_df) > 0 else False
+    gtf_has_chr = tss_df['chrom'].iloc[0].startswith('chr')
+    
+    if sample_has_chr != gtf_has_chr:
+        print("⚠ Chromosome format mismatch detected. Converting...")
+        if sample_has_chr and not gtf_has_chr:
+            # TSV has "chr", GTF doesn't - add chr to GTF
+            tss_df['chrom'] = tss_df['chrom'].apply(add_chr_prefix)
+        elif not sample_has_chr and gtf_has_chr:
+            # GTF has "chr", TSV doesn't - add chr to TSV
+            meth_df['chrom'] = meth_df['chrom'].apply(add_chr_prefix)
+    
+    # Filter data within ±2kb of any TSS - optimized approach
+    print("Filtering TSS regions...")
     tss_regions = []
-    for _, tss_row in tqdm(tss_df.iterrows(), total=len(tss_df), desc="Filtering TSS regions"):
-        region = meth_df[
-            (meth_df['chrom'] == tss_row['chrom']) &
-            (meth_df['start'] >= tss_row['start']) &
-            (meth_df['end'] <= tss_row['end'])
+    matched_genes = 0
+    
+    # Group methylation data by chromosome for faster lookup
+    meth_by_chrom = {chrom: group for chrom, group in meth_df.groupby('chrom')}
+    
+    for _, tss_row in tqdm(tss_df.iterrows(), total=len(tss_df), desc="Processing TSS"):
+        chrom = tss_row['chrom']
+        
+        # Skip if chromosome not in methylation data
+        if chrom not in meth_by_chrom:
+            continue
+        
+        # Filter region
+        chrom_data = meth_by_chrom[chrom]
+        region = chrom_data[
+            (chrom_data['start'] >= tss_row['start']) &
+            (chrom_data['end'] <= tss_row['end'])
         ].copy()
         
         if len(region) > 0:
+            matched_genes += 1
             # Calculate distance from TSS
             pos = (region['start'] + region['end']) / 2
             if tss_row['strand'] == '+':
@@ -94,16 +140,28 @@ for sample_file in sample_files:
             
             tss_regions.append(region)
     
-    tss_data = pd.concat(tss_regions, ignore_index=True) if tss_regions else pd.DataFrame()
+    print(f"Found methylation data for {matched_genes} genes")
     
-    # Calculate overall averages across all TSS regions
-    avg_5mc = tss_data['percent_m'].mean() if len(tss_data) > 0 else np.nan
-    avg_5hmc = tss_data['percent_h'].mean() if len(tss_data) > 0 else np.nan
+    if len(tss_regions) == 0:
+        print("⚠ WARNING: No TSS regions found! Check chromosome naming.")
+        continue
+    
+    tss_data = pd.concat(tss_regions, ignore_index=True)
+    print(f"Total methylation sites in TSS regions: {len(tss_data)}")
+    
+    # Calculate overall averages
+    avg_5mc = tss_data['percent_m'].mean()
+    avg_5hmc = tss_data['percent_h'].mean()
+    
+    print(f"Average 5mC: {avg_5mc:.2f}%")
+    print(f"Average 5hmC: {avg_5hmc:.2f}%")
     
     all_averages.append({
         'Sample': sample_name,
         '5mC': avg_5mc,
-        '5hmC': avg_5hmc
+        '5hmC': avg_5hmc,
+        'N_sites': len(tss_data),
+        'N_genes': matched_genes
     })
     
     # Calculate binned profiles
@@ -120,32 +178,35 @@ for sample_file in sample_files:
             if pd.notna(row['percent_h']):
                 hmeth_profile[bin_centers[bin_idx]].append(row['percent_h'])
     
-    meth_mean = [np.mean(meth_profile[bc]) if bc in meth_profile else np.nan 
-                 for bc in bin_centers]
-    hmeth_mean = [np.mean(hmeth_profile[bc]) if bc in hmeth_profile else np.nan 
-                  for bc in bin_centers]
+    meth_mean = [np.mean(meth_profile[bc]) if bc in meth_profile and len(meth_profile[bc]) > 0 
+                 else np.nan for bc in bin_centers]
+    hmeth_mean = [np.mean(hmeth_profile[bc]) if bc in hmeth_profile and len(hmeth_profile[bc]) > 0 
+                  else np.nan for bc in bin_centers]
     
     all_profiles[sample_name] = {'5mC': meth_mean, '5hmC': hmeth_mean}
 
 # -------------------
-# Save average summary table
+# Save summary
 # -------------------
+if not all_averages:
+    print("\n❌ ERROR: No data was processed. Check file paths and chromosome naming.")
+    exit(1)
+
 avg_df = pd.DataFrame(all_averages)
 avg_df.to_csv(os.path.join(out_dir, 'tss_average_methylation.csv'), index=False)
-print("\n" + "="*50)
-print("Average methylation levels in TSS regions (±2kb):")
+print("\n" + "="*60)
+print("Summary of TSS methylation (±2kb):")
 print(avg_df.to_string(index=False))
-print("="*50)
+print("="*60)
 
 # -------------------
-# Plot combined profile comparison (-2kb to +2kb)
+# Plot combined profiles
 # -------------------
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
 
-# 5mC profile
 for sample_name, profiles in all_profiles.items():
-    ax1.plot(bin_centers, profiles['5mC'], linewidth=2.5, label=sample_name, alpha=0.85)
-ax1.axvline(x=0, color='black', linestyle='--', alpha=0.6, linewidth=1.5, label='TSS')
+    ax1.plot(bin_centers, profiles['5mC'], linewidth=2.5, label=sample_name, alpha=0.85, marker='o', markersize=3)
+ax1.axvline(x=0, color='black', linestyle='--', alpha=0.6, linewidth=1.5)
 ax1.set_xlabel('Distance from TSS (bp)', fontsize=12, fontweight='bold')
 ax1.set_ylabel('Average 5mC level (%)', fontsize=12, fontweight='bold')
 ax1.set_title('5mC Distribution Around TSS', fontsize=13, fontweight='bold')
@@ -153,10 +214,9 @@ ax1.legend(fontsize=9)
 ax1.grid(True, alpha=0.3)
 ax1.set_xlim(-window_size, window_size)
 
-# 5hmC profile
 for sample_name, profiles in all_profiles.items():
-    ax2.plot(bin_centers, profiles['5hmC'], linewidth=2.5, label=sample_name, alpha=0.85)
-ax2.axvline(x=0, color='black', linestyle='--', alpha=0.6, linewidth=1.5, label='TSS')
+    ax2.plot(bin_centers, profiles['5hmC'], linewidth=2.5, label=sample_name, alpha=0.85, marker='o', markersize=3)
+ax2.axvline(x=0, color='black', linestyle='--', alpha=0.6, linewidth=1.5)
 ax2.set_xlabel('Distance from TSS (bp)', fontsize=12, fontweight='bold')
 ax2.set_ylabel('Average 5hmC level (%)', fontsize=12, fontweight='bold')
 ax2.set_title('5hmC Distribution Around TSS', fontsize=13, fontweight='bold')
@@ -166,40 +226,6 @@ ax2.set_xlim(-window_size, window_size)
 
 plt.tight_layout()
 plt.savefig(os.path.join(out_dir, 'tss_methylation_profiles.png'), dpi=300, bbox_inches='tight')
-plt.close()
-
-# -------------------
-# Plot 5mC profile comparison
-# -------------------
-plt.figure(figsize=(10, 6))
-for sample_name, profiles in all_profiles.items():
-    plt.plot(bin_centers, profiles['5mC'], linewidth=2, label=sample_name, alpha=0.8)
-
-plt.axvline(x=0, color='gray', linestyle='--', alpha=0.5, linewidth=1.5)
-plt.xlabel('Distance from TSS (bp)', fontsize=12, fontweight='bold')
-plt.ylabel('5mC level (%)', fontsize=12, fontweight='bold')
-plt.title('5mC Distribution Around TSS', fontsize=14, fontweight='bold')
-plt.legend(fontsize=10)
-plt.grid(True, alpha=0.3)
-plt.tight_layout()
-plt.savefig(os.path.join(out_dir, '5mC_tss_profile.png'), dpi=300, bbox_inches='tight')
-plt.close()
-
-# -------------------
-# Plot 5hmC profile comparison
-# -------------------
-plt.figure(figsize=(10, 6))
-for sample_name, profiles in all_profiles.items():
-    plt.plot(bin_centers, profiles['5hmC'], linewidth=2, label=sample_name, alpha=0.8)
-
-plt.axvline(x=0, color='gray', linestyle='--', alpha=0.5, linewidth=1.5)
-plt.xlabel('Distance from TSS (bp)', fontsize=12, fontweight='bold')
-plt.ylabel('5hmC level (%)', fontsize=12, fontweight='bold')
-plt.title('5hmC Distribution Around TSS', fontsize=14, fontweight='bold')
-plt.legend(fontsize=10)
-plt.grid(True, alpha=0.3)
-plt.tight_layout()
-plt.savefig(os.path.join(out_dir, '5hmC_tss_profile.png'), dpi=300, bbox_inches='tight')
 plt.close()
 
 # -------------------
@@ -214,8 +240,6 @@ profile_df = pd.DataFrame(output_data)
 profile_df.to_csv(os.path.join(out_dir, 'tss_profiles_all_samples.csv'), index=False)
 
 print(f"\n✓ Results saved to {out_dir}/")
-print(f"  - tss_average_methylation.csv (summary table)")
-print(f"  - tss_average_barplot.png (average comparison)")
-print(f"  - 5mC_tss_profile.png (profile comparison)")
-print(f"  - 5hmC_tss_profile.png (profile comparison)")
-print(f"  - tss_profiles_all_samples.csv (detailed data)")
+print(f"  - tss_average_methylation.csv")
+print(f"  - tss_methylation_profiles.png")
+print(f"  - tss_profiles_all_samples.csv")
