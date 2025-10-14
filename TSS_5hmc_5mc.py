@@ -202,15 +202,39 @@ for sample_file in sample_files:
     }
 
 # -------------------
-# Plot like Figure 4a
+# Calculate log2 fold change vs control
 # -------------------
-fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 5))
+# Use first sample as control (or change to specific control name)
+control_name = list(all_profiles.keys())[0]
+print(f"\nUsing {control_name} as baseline for log2 fold change")
 
+log2fc_profiles = {}
+for sample, data in all_profiles.items():
+    control_5mc = np.array(all_profiles[control_name]['5mC'])
+    control_5hmc = np.array(all_profiles[control_name]['5hmC'])
+    
+    sample_5mc = np.array(data['5mC'])
+    sample_5hmc = np.array(data['5hmC'])
+    
+    # Calculate log2 fold change (add pseudocount to avoid log(0))
+    log2fc_5mc = np.log2((sample_5mc + 0.01) / (control_5mc + 0.01))
+    log2fc_5hmc = np.log2((sample_5hmc + 0.01) / (control_5hmc + 0.01))
+    
+    log2fc_profiles[sample] = {
+        '5mC': log2fc_5mc,
+        '5hmC': log2fc_5hmc
+    }
+
+# -------------------
+# Plot both versions
+# -------------------
 x_pos = np.arange(len(x_labels))
 tss_pos = n_flank_bins
 tes_pos = n_flank_bins + n_gene_bins
 
-# 5mC
+# Regular plot
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 5))
+
 for sample, data in all_profiles.items():
     ax1.plot(x_pos, data['5mC'], linewidth=2, label=sample, alpha=0.85)
 ax1.axvline(x=tss_pos, color='black', linestyle='--', linewidth=1.5, alpha=0.7)
@@ -219,13 +243,12 @@ ax1.text(tss_pos, ax1.get_ylim()[1]*0.95, 'TSS', ha='center', fontsize=10, fontw
 ax1.text(tes_pos, ax1.get_ylim()[1]*0.95, 'TES', ha='center', fontsize=10, fontweight='bold')
 ax1.set_xlabel("Genomic region (5' → 3')", fontsize=12, fontweight='bold')
 ax1.set_ylabel('5mC level (%)', fontsize=12, fontweight='bold')
-ax1.set_title('5mC Distribution Across Genes', fontsize=13, fontweight='bold')
+ax1.set_title('5mC Distribution', fontsize=13, fontweight='bold')
 ax1.legend(fontsize=9)
 ax1.grid(True, alpha=0.3)
 ax1.set_xticks([0, tss_pos, tss_pos + n_gene_bins//3, tss_pos + 2*n_gene_bins//3, tes_pos, len(x_labels)-1])
 ax1.set_xticklabels(['-2kb', 'TSS', '33%', '66%', 'TES', '+2kb'])
 
-# 5hmC
 for sample, data in all_profiles.items():
     ax2.plot(x_pos, data['5hmC'], linewidth=2, label=sample, alpha=0.85)
 ax2.axvline(x=tss_pos, color='black', linestyle='--', linewidth=1.5, alpha=0.7)
@@ -234,14 +257,57 @@ ax2.text(tss_pos, ax2.get_ylim()[1]*0.95, 'TSS', ha='center', fontsize=10, fontw
 ax2.text(tes_pos, ax2.get_ylim()[1]*0.95, 'TES', ha='center', fontsize=10, fontweight='bold')
 ax2.set_xlabel("Genomic region (5' → 3')", fontsize=12, fontweight='bold')
 ax2.set_ylabel('5hmC level (%)', fontsize=12, fontweight='bold')
-ax2.set_title('5hmC Distribution Across Genes', fontsize=13, fontweight='bold')
+ax2.set_title('5hmC Distribution', fontsize=13, fontweight='bold')
 ax2.legend(fontsize=9)
 ax2.grid(True, alpha=0.3)
 ax2.set_xticks([0, tss_pos, tss_pos + n_gene_bins//3, tss_pos + 2*n_gene_bins//3, tes_pos, len(x_labels)-1])
 ax2.set_xticklabels(['-2kb', 'TSS', '33%', '66%', 'TES', '+2kb'])
 
 plt.tight_layout()
-plt.savefig(os.path.join(out_dir, 'gene_body_methylation_fig4a.png'), dpi=300)
+plt.savefig(os.path.join(out_dir, 'gene_body_methylation_absolute.png'), dpi=300)
 plt.close()
 
-print(f"\n✓ Figure 4a-style plot saved: {out_dir}/gene_body_methylation_fig4a.png")
+# Log2 fold change plot
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 5))
+
+for sample, data in log2fc_profiles.items():
+    if sample == control_name:
+        continue  # Skip control (always 0)
+    ax1.plot(x_pos, data['5mC'], linewidth=2.5, label=sample, alpha=0.85)
+ax1.axhline(y=0, color='red', linestyle='-', linewidth=1, alpha=0.5)
+ax1.axvline(x=tss_pos, color='black', linestyle='--', linewidth=1.5, alpha=0.7)
+ax1.axvline(x=tes_pos, color='black', linestyle='--', linewidth=1.5, alpha=0.7)
+ax1.text(tss_pos, ax1.get_ylim()[1]*0.95, 'TSS', ha='center', fontsize=10, fontweight='bold')
+ax1.text(tes_pos, ax1.get_ylim()[1]*0.95, 'TES', ha='center', fontsize=10, fontweight='bold')
+ax1.set_xlabel("Genomic region (5' → 3')", fontsize=12, fontweight='bold')
+ax1.set_ylabel(f'5mC Log₂(FC vs {control_name})', fontsize=12, fontweight='bold')
+ax1.set_title('5mC Fold Change', fontsize=13, fontweight='bold')
+ax1.legend(fontsize=9)
+ax1.grid(True, alpha=0.3)
+ax1.set_xticks([0, tss_pos, tss_pos + n_gene_bins//3, tss_pos + 2*n_gene_bins//3, tes_pos, len(x_labels)-1])
+ax1.set_xticklabels(['-2kb', 'TSS', '33%', '66%', 'TES', '+2kb'])
+
+for sample, data in log2fc_profiles.items():
+    if sample == control_name:
+        continue
+    ax2.plot(x_pos, data['5hmC'], linewidth=2.5, label=sample, alpha=0.85)
+ax2.axhline(y=0, color='red', linestyle='-', linewidth=1, alpha=0.5)
+ax2.axvline(x=tss_pos, color='black', linestyle='--', linewidth=1.5, alpha=0.7)
+ax2.axvline(x=tes_pos, color='black', linestyle='--', linewidth=1.5, alpha=0.7)
+ax2.text(tss_pos, ax2.get_ylim()[1]*0.95, 'TSS', ha='center', fontsize=10, fontweight='bold')
+ax2.text(tes_pos, ax2.get_ylim()[1]*0.95, 'TES', ha='center', fontsize=10, fontweight='bold')
+ax2.set_xlabel("Genomic region (5' → 3')", fontsize=12, fontweight='bold')
+ax2.set_ylabel(f'5hmC Log₂(FC vs {control_name})', fontsize=12, fontweight='bold')
+ax2.set_title('5hmC Fold Change', fontsize=13, fontweight='bold')
+ax2.legend(fontsize=9)
+ax2.grid(True, alpha=0.3)
+ax2.set_xticks([0, tss_pos, tss_pos + n_gene_bins//3, tss_pos + 2*n_gene_bins//3, tes_pos, len(x_labels)-1])
+ax2.set_xticklabels(['-2kb', 'TSS', '33%', '66%', 'TES', '+2kb'])
+
+plt.tight_layout()
+plt.savefig(os.path.join(out_dir, 'gene_body_methylation_log2fc.png'), dpi=300)
+plt.close()
+
+print(f"\n✓ Plots saved:")
+print(f"  {out_dir}/gene_body_methylation_absolute.png")
+print(f"  {out_dir}/gene_body_methylation_log2fc.png")
