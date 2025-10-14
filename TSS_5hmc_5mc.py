@@ -94,18 +94,21 @@ for sample_file in sample_files:
     print(f"Loaded {len(meth_df)} methylation sites")
     print(f"TSV chromosome examples: {meth_df['chrom'].unique()[:5]}")
     
-    # Check chromosome format mismatch and fix
-    sample_has_chr = meth_df['chrom'].iloc[0].startswith('chr') if len(meth_df) > 0 else False
-    gtf_has_chr = tss_df['chrom'].iloc[0].startswith('chr')
+    # Check chromosome format and standardize
+    sample_has_chr = str(meth_df['chrom'].iloc[0]).startswith('chr') if len(meth_df) > 0 else False
+    gtf_has_chr = str(tss_df['chrom'].iloc[0]).startswith('chr')
     
-    if sample_has_chr != gtf_has_chr:
-        print("⚠ Chromosome format mismatch detected. Converting...")
-        if sample_has_chr and not gtf_has_chr:
-            # TSV has "chr", GTF doesn't - add chr to GTF
-            tss_df['chrom'] = tss_df['chrom'].apply(add_chr_prefix)
-        elif not sample_has_chr and gtf_has_chr:
-            # GTF has "chr", TSV doesn't - add chr to TSV
-            meth_df['chrom'] = meth_df['chrom'].apply(add_chr_prefix)
+    print(f"TSV has 'chr' prefix: {sample_has_chr}")
+    print(f"GTF has 'chr' prefix: {gtf_has_chr}")
+    
+    if sample_has_chr and not gtf_has_chr:
+        print("⚠ Adding 'chr' prefix to GTF chromosomes...")
+        tss_df['chrom'] = tss_df['chrom'].apply(add_chr_prefix)
+        print(f"After conversion: {tss_df['chrom'].unique()[:5]}")
+    elif not sample_has_chr and gtf_has_chr:
+        print("⚠ Adding 'chr' prefix to TSV chromosomes...")
+        meth_df['chrom'] = meth_df['chrom'].apply(add_chr_prefix)
+        print(f"After conversion: {meth_df['chrom'].unique()[:5]}")
     
     # Filter data within ±2kb of any TSS - optimized approach
     print("Filtering TSS regions...")
