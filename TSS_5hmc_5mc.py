@@ -5,7 +5,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import glob
-from collections import defaultdict
 
 # -------------------
 # Configuration
@@ -16,15 +15,14 @@ gtf_file = "/mnt/e/annotations/Homo_sapiens.GRCh38.gtf"
 out_dir = os.path.join(base_dir, "tss_methylation")
 os.makedirs(out_dir, exist_ok=True)
 
-# Parameters
-window_size = 2000  # ±2kb around TSS
-bin_size = 100      # 100bp bins
+flank_size = 2000  # ±2kb flanking regions
+n_gene_bins = 30   # Number of bins for gene body
 
 # -------------------
-# Extract TSS coordinates
+# Extract gene coordinates (TSS and TES)
 # -------------------
-print("Extracting TSS from GTF...")
-tss_data = []
+print("Extracting genes from GTF...")
+genes = []
 with open(gtf_file, 'r') as f:
     for line in f:
         if line.startswith('#'):
@@ -33,26 +31,30 @@ with open(gtf_file, 'r') as f:
         if len(fields) < 9 or fields[2] != 'gene':
             continue
         
-        chrom = fields[0]
-        if not chrom.startswith('chr'):
-            chrom = 'chr' + chrom
-        
+        chrom = fields[0] if fields[0].startswith('chr') else 'chr' + fields[0]
         start = int(fields[3])
         end = int(fields[4])
         strand = fields[6]
-        tss = start if strand == '+' else end
         
-        tss_data.append({
+        if strand == '+':
+            tss, tes = start, end
+        else:
+            tss, tes = end, start
+        
+        genes.append({
             'chrom': chrom,
-            'tss': tss,
+            'start': start,
+            'end': end,
             'strand': strand,
-            'tss_start': tss - window_size,
-            'tss_end': tss + window_size
+            'tss': tss,
+            'tes': tes,
+            'length': abs(end - start)
         })
 
-tss_df = pd.DataFrame(tss_data)
-print(f"Loaded {len(tss_df)} genes")
-print(f"Chromosomes: {sorted(tss_df['chrom'].unique())}")
+genes_df = pd.DataFrame(genes)
+# Filter genes with reasonable length (>500bp)
+genes_df = genes_df[genes_df['length'] > 500]
+print(f"Loaded {len(genes_df)} genes")
 
 # -------------------
 # Process samples
@@ -61,163 +63,185 @@ sample_files = glob.glob(input_pattern)
 if not sample_files:
     raise FileNotFoundError(f"No files found: {input_pattern}")
 
-print(f"\nProcessing {len(sample_files)} samples")
-
 all_profiles = {}
-all_stats = []
 
 for sample_file in sample_files:
     sample_name = os.path.basename(sample_file).replace("_aligned_with_mod.region_mh.stats.tsv", "")
-    print(f"\n{'='*60}")
-    print(f"Sample: {sample_name}")
+    print(f"\nProcessing {sample_name}...")
     
     # Load methylation data
     meth_df = pd.read_csv(sample_file, sep='\t')
     if '#chrom' in meth_df.columns:
         meth_df.rename(columns={'#chrom': 'chrom'}, inplace=True)
-    
-    # Ensure chr prefix
     if not str(meth_df['chrom'].iloc[0]).startswith('chr'):
         meth_df['chrom'] = 'chr' + meth_df['chrom'].astype(str)
     
-    print(f"Loaded {len(meth_df):,} methylation regions")
+    # Create position bins
+    # Upstream: 20 bins from -2kb to TSS
+    # Gene body: 30 bins from TSS to TES (0-100%)
+    # Downstream: 20 bins from TES to +2kb
+    n_flank_bins = 20
     
-    # Find overlaps with TSS regions
-    print("Finding TSS overlaps...")
-    overlaps = []
+    upstream_bins = np.linspace(-flank_size, 0, n_flank_bins + 1)
+    genebody_bins = np.linspace(0, 100, n_gene_bins + 1)
+    downstream_bins = np.linspace(0, flank_size, n_flank_bins + 1)
     
-    for chrom in tqdm(tss_df['chrom'].unique(), desc="Chromosomes"):
-        # Get data for this chromosome
-        tss_chrom = tss_df[tss_df['chrom'] == chrom]
-        meth_chrom = meth_df[meth_df['chrom'] == chrom]
+    # Storage for binned data
+    upstream_5mc = [[] for _ in range(n_flank_bins)]
+    upstream_5hmc = [[] for _ in range(n_flank_bins)]
+    genebody_5mc = [[] for _ in range(n_gene_bins)]
+    genebody_5hmc = [[] for _ in range(n_gene_bins)]
+    downstream_5mc = [[] for _ in range(n_flank_bins)]
+    downstream_5hmc = [[] for _ in range(n_flank_bins)]
+    
+    # Process each gene
+    for _, gene in tqdm(genes_df.iterrows(), total=len(genes_df), desc="Genes"):
+        chrom = gene['chrom']
+        tss = gene['tss']
+        tes = gene['tes']
+        strand = gene['strand']
         
-        if len(meth_chrom) == 0:
+        # Get methylation data for this region
+        if strand == '+':
+            region_start = tss - flank_size
+            region_end = tes + flank_size
+        else:
+            region_start = tes - flank_size
+            region_end = tss + flank_size
+        
+        meth_region = meth_df[
+            (meth_df['chrom'] == chrom) &
+            (meth_df['end'] > min(region_start, region_end)) &
+            (meth_df['start'] < max(region_start, region_end))
+        ]
+        
+        if len(meth_region) == 0:
             continue
         
-        # For each TSS region, find overlapping methylation sites
-        for _, tss_row in tss_chrom.iterrows():
-            # Find overlaps: meth_end > tss_start AND meth_start < tss_end
-            overlap_mask = (
-                (meth_chrom['end'] > tss_row['tss_start']) &
-                (meth_chrom['start'] < tss_row['tss_end'])
-            )
+        for _, meth in meth_region.iterrows():
+            center = (meth['start'] + meth['end']) / 2
             
-            matched = meth_chrom[overlap_mask].copy()
-            if len(matched) == 0:
-                continue
+            # Calculate position relative to gene
+            if strand == '+':
+                # Upstream region
+                if center < tss:
+                    dist = center - tss
+                    bin_idx = np.digitize(dist, upstream_bins) - 1
+                    if 0 <= bin_idx < n_flank_bins:
+                        upstream_5mc[bin_idx].append(meth['percent_m'])
+                        upstream_5hmc[bin_idx].append(meth['percent_h'])
+                
+                # Gene body
+                elif tss <= center <= tes:
+                    pct = 100 * (center - tss) / (tes - tss)
+                    bin_idx = np.digitize(pct, genebody_bins) - 1
+                    if 0 <= bin_idx < n_gene_bins:
+                        genebody_5mc[bin_idx].append(meth['percent_m'])
+                        genebody_5hmc[bin_idx].append(meth['percent_h'])
+                
+                # Downstream region
+                elif center > tes:
+                    dist = center - tes
+                    bin_idx = np.digitize(dist, downstream_bins) - 1
+                    if 0 <= bin_idx < n_flank_bins:
+                        downstream_5mc[bin_idx].append(meth['percent_m'])
+                        downstream_5hmc[bin_idx].append(meth['percent_h'])
             
-            # Calculate methylation site center position
-            matched['center'] = (matched['start'] + matched['end']) / 2
-            
-            # Calculate distance from TSS (strand-aware)
-            if tss_row['strand'] == '+':
-                matched['dist_from_tss'] = matched['center'] - tss_row['tss']
-            else:
-                matched['dist_from_tss'] = tss_row['tss'] - matched['center']
-            
-            overlaps.append(matched)
+            else:  # Minus strand
+                # Upstream (right side, higher coordinates)
+                if center > tss:
+                    dist = center - tss
+                    bin_idx = np.digitize(dist, downstream_bins) - 1
+                    if 0 <= bin_idx < n_flank_bins:
+                        upstream_5mc[n_flank_bins - 1 - bin_idx].append(meth['percent_m'])
+                        upstream_5hmc[n_flank_bins - 1 - bin_idx].append(meth['percent_h'])
+                
+                # Gene body (reversed)
+                elif tes <= center <= tss:
+                    pct = 100 * (tss - center) / (tss - tes)
+                    bin_idx = np.digitize(pct, genebody_bins) - 1
+                    if 0 <= bin_idx < n_gene_bins:
+                        genebody_5mc[bin_idx].append(meth['percent_m'])
+                        genebody_5hmc[bin_idx].append(meth['percent_h'])
+                
+                # Downstream (left side, lower coordinates)
+                elif center < tes:
+                    dist = tes - center
+                    bin_idx = np.digitize(dist, downstream_bins) - 1
+                    if 0 <= bin_idx < n_flank_bins:
+                        downstream_5mc[n_flank_bins - 1 - bin_idx].append(meth['percent_m'])
+                        downstream_5hmc[n_flank_bins - 1 - bin_idx].append(meth['percent_h'])
     
-    if len(overlaps) == 0:
-        print("⚠️  No overlaps found!")
-        continue
+    # Calculate means
+    profile_5mc = []
+    profile_5hmc = []
+    x_labels = []
     
-    # Combine all overlaps
-    tss_meth = pd.concat(overlaps, ignore_index=True)
-    print(f"Found {len(tss_meth):,} methylation sites near TSS")
+    # Upstream
+    for i, bin_start in enumerate(upstream_bins[:-1]):
+        profile_5mc.append(np.nanmean(upstream_5mc[i]) if upstream_5mc[i] else np.nan)
+        profile_5hmc.append(np.nanmean(upstream_5hmc[i]) if upstream_5hmc[i] else np.nan)
+        x_labels.append(bin_start)
     
-    # Calculate genome-wide averages
-    avg_5mc = tss_meth['percent_m'].mean()
-    avg_5hmc = tss_meth['percent_h'].mean()
-    print(f"Average 5mC: {avg_5mc:.2f}%")
-    print(f"Average 5hmC: {avg_5hmc:.2f}%")
+    # Gene body
+    for i, pct in enumerate(genebody_bins[:-1]):
+        profile_5mc.append(np.nanmean(genebody_5mc[i]) if genebody_5mc[i] else np.nan)
+        profile_5hmc.append(np.nanmean(genebody_5hmc[i]) if genebody_5hmc[i] else np.nan)
+        x_labels.append(f"{pct:.0f}%")
     
-    all_stats.append({
-        'Sample': sample_name,
-        'N_sites': len(tss_meth),
-        'Avg_5mC': avg_5mc,
-        'Avg_5hmC': avg_5hmc
-    })
-    
-    # Bin by distance from TSS
-    print("Binning by distance...")
-    bins = np.arange(-window_size, window_size + bin_size, bin_size)
-    tss_meth['bin'] = pd.cut(tss_meth['dist_from_tss'], bins=bins, labels=False)
-    
-    # Calculate average methylation per bin
-    bin_centers = bins[:-1] + bin_size / 2
-    binned_5mc = tss_meth.groupby('bin')['percent_m'].mean()
-    binned_5hmc = tss_meth.groupby('bin')['percent_h'].mean()
-    
-    # Fill missing bins with NaN
-    profile_5mc = [binned_5mc.get(i, np.nan) for i in range(len(bin_centers))]
-    profile_5hmc = [binned_5hmc.get(i, np.nan) for i in range(len(bin_centers))]
+    # Downstream
+    for i, bin_start in enumerate(downstream_bins[:-1]):
+        profile_5mc.append(np.nanmean(downstream_5mc[i]) if downstream_5mc[i] else np.nan)
+        profile_5hmc.append(np.nanmean(downstream_5hmc[i]) if downstream_5hmc[i] else np.nan)
+        x_labels.append(f"+{bin_start:.0f}")
     
     all_profiles[sample_name] = {
         '5mC': profile_5mc,
         '5hmC': profile_5hmc,
-        'bin_centers': bin_centers
+        'x_labels': x_labels
     }
 
 # -------------------
-# Save summary statistics
+# Plot like Figure 4a
 # -------------------
-if not all_stats:
-    print("\n❌ No data processed!")
-    exit(1)
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 5))
 
-stats_df = pd.DataFrame(all_stats)
-stats_df.to_csv(os.path.join(out_dir, 'tss_methylation_summary.csv'), index=False)
-
-print("\n" + "="*60)
-print("TSS Methylation Summary (±2kb):")
-print(stats_df.to_string(index=False))
-print("="*60)
-
-# -------------------
-# Plot profiles
-# -------------------
-fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
-
-bin_centers = list(all_profiles.values())[0]['bin_centers']
+x_pos = np.arange(len(x_labels))
+tss_pos = n_flank_bins
+tes_pos = n_flank_bins + n_gene_bins
 
 # 5mC
 for sample, data in all_profiles.items():
-    ax1.plot(bin_centers, data['5mC'], linewidth=2.5, label=sample, alpha=0.85)
-ax1.axvline(x=0, color='red', linestyle='--', linewidth=2, label='TSS')
-ax1.set_xlabel('Distance from TSS (bp)', fontsize=12, fontweight='bold')
-ax1.set_ylabel('5mC (%)', fontsize=12, fontweight='bold')
-ax1.set_title('5mC Distribution Around TSS', fontsize=13, fontweight='bold')
+    ax1.plot(x_pos, data['5mC'], linewidth=2, label=sample, alpha=0.85)
+ax1.axvline(x=tss_pos, color='black', linestyle='--', linewidth=1.5, alpha=0.7)
+ax1.axvline(x=tes_pos, color='black', linestyle='--', linewidth=1.5, alpha=0.7)
+ax1.text(tss_pos, ax1.get_ylim()[1]*0.95, 'TSS', ha='center', fontsize=10, fontweight='bold')
+ax1.text(tes_pos, ax1.get_ylim()[1]*0.95, 'TES', ha='center', fontsize=10, fontweight='bold')
+ax1.set_xlabel("Genomic region (5' → 3')", fontsize=12, fontweight='bold')
+ax1.set_ylabel('5mC level (%)', fontsize=12, fontweight='bold')
+ax1.set_title('5mC Distribution Across Genes', fontsize=13, fontweight='bold')
 ax1.legend(fontsize=9)
 ax1.grid(True, alpha=0.3)
-ax1.set_xlim(-window_size, window_size)
+ax1.set_xticks([0, tss_pos, tss_pos + n_gene_bins//3, tss_pos + 2*n_gene_bins//3, tes_pos, len(x_labels)-1])
+ax1.set_xticklabels(['-2kb', 'TSS', '33%', '66%', 'TES', '+2kb'])
 
 # 5hmC
 for sample, data in all_profiles.items():
-    ax2.plot(bin_centers, data['5hmC'], linewidth=2.5, label=sample, alpha=0.85)
-ax2.axvline(x=0, color='red', linestyle='--', linewidth=2, label='TSS')
-ax2.set_xlabel('Distance from TSS (bp)', fontsize=12, fontweight='bold')
-ax2.set_ylabel('5hmC (%)', fontsize=12, fontweight='bold')
-ax2.set_title('5hmC Distribution Around TSS', fontsize=13, fontweight='bold')
+    ax2.plot(x_pos, data['5hmC'], linewidth=2, label=sample, alpha=0.85)
+ax2.axvline(x=tss_pos, color='black', linestyle='--', linewidth=1.5, alpha=0.7)
+ax2.axvline(x=tes_pos, color='black', linestyle='--', linewidth=1.5, alpha=0.7)
+ax2.text(tss_pos, ax2.get_ylim()[1]*0.95, 'TSS', ha='center', fontsize=10, fontweight='bold')
+ax2.text(tes_pos, ax2.get_ylim()[1]*0.95, 'TES', ha='center', fontsize=10, fontweight='bold')
+ax2.set_xlabel("Genomic region (5' → 3')", fontsize=12, fontweight='bold')
+ax2.set_ylabel('5hmC level (%)', fontsize=12, fontweight='bold')
+ax2.set_title('5hmC Distribution Across Genes', fontsize=13, fontweight='bold')
 ax2.legend(fontsize=9)
 ax2.grid(True, alpha=0.3)
-ax2.set_xlim(-window_size, window_size)
+ax2.set_xticks([0, tss_pos, tss_pos + n_gene_bins//3, tss_pos + 2*n_gene_bins//3, tes_pos, len(x_labels)-1])
+ax2.set_xticklabels(['-2kb', 'TSS', '33%', '66%', 'TES', '+2kb'])
 
 plt.tight_layout()
-plt.savefig(os.path.join(out_dir, 'tss_methylation_profiles.png'), dpi=300)
+plt.savefig(os.path.join(out_dir, 'gene_body_methylation_fig4a.png'), dpi=300)
 plt.close()
 
-# -------------------
-# Save detailed profile data
-# -------------------
-profile_data = {'distance_from_tss': bin_centers}
-for sample, data in all_profiles.items():
-    profile_data[f'{sample}_5mC'] = data['5mC']
-    profile_data[f'{sample}_5hmC'] = data['5hmC']
-
-profile_df = pd.DataFrame(profile_data)
-profile_df.to_csv(os.path.join(out_dir, 'tss_profiles_detailed.csv'), index=False)
-
-print(f"\n✓ Results saved:")
-print(f"  {out_dir}/tss_methylation_summary.csv")
-print(f"  {out_dir}/tss_methylation_profiles.png")
-print(f"  {out_dir}/tss_profiles_detailed.csv")
+print(f"\n✓ Figure 4a-style plot saved: {out_dir}/gene_body_methylation_fig4a.png")
