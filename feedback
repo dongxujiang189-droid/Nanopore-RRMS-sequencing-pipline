@@ -1,0 +1,29 @@
+feedback
+(seq_env) jiangd@NE060250W79682D:/mnt/e/Data/seq_for_human_293t2/barcode04$ python3 comethylation_analy.py
+Calculating thresholds...
+Loading: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 4/4 [00:00<00:00, 38.69it/s]
+Thresholds: 5mC=57.65%, 5hmC=1.89%
+Distance cutoff: 500bp
+
+Processing samples...
+
+barcode04
+  5mC: 0 pairs | 5hmC: 0 pairs
+
+barcode05
+  5mC: 0 pairs | 5hmC: 0 pairs
+
+barcode06
+  5mC: 0 pairs | 5hmC: 0 pairs
+
+barcode07
+  5mC: 0 pairs | 5hmC: 0 pairs
+
+======================================================================
+COMPLETE
+======================================================================
+
+Output: /mnt/e/Data/seq_for_human_293t2/methylation_density_2d/
+  • [sample]_adjacent_density.png
+  • [sample]_distance_stratified.png
+(seq_env) jiangd@NE060250W79682D:/mnt/e/Data/seq_for_human_293t2/barcode04$
