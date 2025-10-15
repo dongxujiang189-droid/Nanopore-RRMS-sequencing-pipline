@@ -204,9 +204,9 @@ for sample_file in sample_files:
 # -------------------
 # Calculate log2 fold change vs control
 # -------------------
-# Use first sample as control (or change to specific control name)
+# Use first sample as control (or specify: control_name = "barcode04")
 control_name = list(all_profiles.keys())[0]
-print(f"\nUsing {control_name} as baseline for log2 fold change")
+print(f"\nCalculating log2 fold change using {control_name} as control")
 
 log2fc_profiles = {}
 for sample, data in all_profiles.items():
@@ -216,14 +216,25 @@ for sample, data in all_profiles.items():
     sample_5mc = np.array(data['5mC'])
     sample_5hmc = np.array(data['5hmC'])
     
-    # Calculate log2 fold change (add pseudocount to avoid log(0))
-    log2fc_5mc = np.log2((sample_5mc + 0.01) / (control_5mc + 0.01))
-    log2fc_5hmc = np.log2((sample_5hmc + 0.01) / (control_5hmc + 0.01))
+    # Calculate log2 fold change: log2(sample/control)
+    # Add pseudocount of 1 to avoid division by zero (since values are percentages 0-100)
+    pseudocount = 1.0
+    
+    log2fc_5mc = np.log2((sample_5mc + pseudocount) / (control_5mc + pseudocount))
+    log2fc_5hmc = np.log2((sample_5hmc + pseudocount) / (control_5hmc + pseudocount))
+    
+    # Replace any inf or -inf with NaN
+    log2fc_5mc = np.where(np.isfinite(log2fc_5mc), log2fc_5mc, np.nan)
+    log2fc_5hmc = np.where(np.isfinite(log2fc_5hmc), log2fc_5hmc, np.nan)
     
     log2fc_profiles[sample] = {
         '5mC': log2fc_5mc,
         '5hmC': log2fc_5hmc
     }
+    
+    if sample != control_name:
+        print(f"  {sample}: 5mC range [{np.nanmin(log2fc_5mc):.2f}, {np.nanmax(log2fc_5mc):.2f}], "
+              f"5hmC range [{np.nanmin(log2fc_5hmc):.2f}, {np.nanmax(log2fc_5hmc):.2f}]")
 
 # -------------------
 # Plot both versions
@@ -270,44 +281,62 @@ plt.close()
 # Log2 fold change plot
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 5))
 
+# 5mC log2 fold change
 for sample, data in log2fc_profiles.items():
     if sample == control_name:
         continue  # Skip control (always 0)
-    ax1.plot(x_pos, data['5mC'], linewidth=2.5, label=sample, alpha=0.85)
-ax1.axhline(y=0, color='red', linestyle='-', linewidth=1, alpha=0.5)
+    ax1.plot(x_pos, data['5mC'], linewidth=2.5, label=sample, alpha=0.85, marker='o', markersize=2)
+
+ax1.axhline(y=0, color='red', linestyle='-', linewidth=1.5, alpha=0.7, label='No change')
 ax1.axvline(x=tss_pos, color='black', linestyle='--', linewidth=1.5, alpha=0.7)
 ax1.axvline(x=tes_pos, color='black', linestyle='--', linewidth=1.5, alpha=0.7)
 ax1.text(tss_pos, ax1.get_ylim()[1]*0.95, 'TSS', ha='center', fontsize=10, fontweight='bold')
 ax1.text(tes_pos, ax1.get_ylim()[1]*0.95, 'TES', ha='center', fontsize=10, fontweight='bold')
 ax1.set_xlabel("Genomic region (5' → 3')", fontsize=12, fontweight='bold')
-ax1.set_ylabel(f'5mC Log₂(FC vs {control_name})', fontsize=12, fontweight='bold')
-ax1.set_title('5mC Fold Change', fontsize=13, fontweight='bold')
-ax1.legend(fontsize=9)
+ax1.set_ylabel('5mC level\n(Log₂ fold change vs control)', fontsize=12, fontweight='bold')
+ax1.set_title(f'5mC: Log₂ Fold Change vs {control_name}', fontsize=13, fontweight='bold')
+ax1.legend(fontsize=9, loc='best')
 ax1.grid(True, alpha=0.3)
 ax1.set_xticks([0, tss_pos, tss_pos + n_gene_bins//3, tss_pos + 2*n_gene_bins//3, tes_pos, len(x_labels)-1])
 ax1.set_xticklabels(['-2kb', 'TSS', '33%', '66%', 'TES', '+2kb'])
+# Add horizontal shading for fold change interpretation
+ax1.axhspan(-1, 1, alpha=0.1, color='gray', label='<2-fold change')
 
+# 5hmC log2 fold change
 for sample, data in log2fc_profiles.items():
     if sample == control_name:
         continue
-    ax2.plot(x_pos, data['5hmC'], linewidth=2.5, label=sample, alpha=0.85)
-ax2.axhline(y=0, color='red', linestyle='-', linewidth=1, alpha=0.5)
+    ax2.plot(x_pos, data['5hmC'], linewidth=2.5, label=sample, alpha=0.85, marker='o', markersize=2)
+
+ax2.axhline(y=0, color='red', linestyle='-', linewidth=1.5, alpha=0.7, label='No change')
 ax2.axvline(x=tss_pos, color='black', linestyle='--', linewidth=1.5, alpha=0.7)
 ax2.axvline(x=tes_pos, color='black', linestyle='--', linewidth=1.5, alpha=0.7)
 ax2.text(tss_pos, ax2.get_ylim()[1]*0.95, 'TSS', ha='center', fontsize=10, fontweight='bold')
 ax2.text(tes_pos, ax2.get_ylim()[1]*0.95, 'TES', ha='center', fontsize=10, fontweight='bold')
 ax2.set_xlabel("Genomic region (5' → 3')", fontsize=12, fontweight='bold')
-ax2.set_ylabel(f'5hmC Log₂(FC vs {control_name})', fontsize=12, fontweight='bold')
-ax2.set_title('5hmC Fold Change', fontsize=13, fontweight='bold')
-ax2.legend(fontsize=9)
+ax2.set_ylabel('5hmC level\n(Log₂ fold change vs control)', fontsize=12, fontweight='bold')
+ax2.set_title(f'5hmC: Log₂ Fold Change vs {control_name}', fontsize=13, fontweight='bold')
+ax2.legend(fontsize=9, loc='best')
 ax2.grid(True, alpha=0.3)
 ax2.set_xticks([0, tss_pos, tss_pos + n_gene_bins//3, tss_pos + 2*n_gene_bins//3, tes_pos, len(x_labels)-1])
 ax2.set_xticklabels(['-2kb', 'TSS', '33%', '66%', 'TES', '+2kb'])
+ax2.axhspan(-1, 1, alpha=0.1, color='gray', label='<2-fold change')
 
 plt.tight_layout()
-plt.savefig(os.path.join(out_dir, 'gene_body_methylation_log2fc.png'), dpi=300)
+plt.savefig(os.path.join(out_dir, 'gene_body_methylation_log2fc.png'), dpi=300, bbox_inches='tight')
 plt.close()
+
+# Save log2 fold change data
+log2fc_data = {'distance_from_tss': x_labels}
+for sample, data in log2fc_profiles.items():
+    if sample != control_name:
+        log2fc_data[f'{sample}_5mC_log2fc'] = data['5mC']
+        log2fc_data[f'{sample}_5hmC_log2fc'] = data['5hmC']
+
+log2fc_df = pd.DataFrame(log2fc_data)
+log2fc_df.to_csv(os.path.join(out_dir, 'gene_body_log2fc_data.csv'), index=False)
 
 print(f"\n✓ Plots saved:")
 print(f"  {out_dir}/gene_body_methylation_absolute.png")
 print(f"  {out_dir}/gene_body_methylation_log2fc.png")
+print(f"  {out_dir}/gene_body_log2fc_data.csv")
