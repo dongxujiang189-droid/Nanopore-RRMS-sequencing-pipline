@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Methylation Distance Analysis - Research-Based Visualization
-Based on literature: correlation decays within 400bp-2kb
+Window-Based Methylation Pattern Analysis
+Divide genome into 500bp windows and analyze CpG position vs methylation
 """
 
 import os
@@ -10,7 +10,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 from matplotlib.gridspec import GridSpec
-from scipy.stats import pearsonr
+import seaborn as sns
 import glob
 from tqdm import tqdm
 import warnings
@@ -19,36 +19,59 @@ warnings.filterwarnings('ignore')
 # Configuration
 base_dir = "/mnt/e/Data/seq_for_human_293t2/"
 input_pattern = os.path.join(base_dir, "modkit", "*_aligned_with_mod.region_mh.stats.tsv")
-out_dir = os.path.join(base_dir, "methylation_analysis_optimized")
+out_dir = os.path.join(base_dir, "methylation_window_analysis")
 os.makedirs(out_dir, exist_ok=True)
 
 MIN_COVERAGE = 10
-DISTANCE_BINS = [0, 100, 500, 2000, 10000]  # Based on literature
+WINDOW_SIZE = 500  # bp
+MIN_CPGS_PER_WINDOW = 3  # Minimum CpGs required in window
 chromosomes = [f'chr{i}' for i in range(1, 23)] + ['chrX']
 
-print(f"Coverage threshold: ≥{MIN_COVERAGE}x\n")
+print(f"Window size: {WINDOW_SIZE}bp | Min CpGs/window: {MIN_CPGS_PER_WINDOW} | Coverage: ≥{MIN_COVERAGE}x\n")
 
-# Extract adjacent pairs
-def extract_pairs(chrom_df, mod_type='5mC'):
+def extract_window_patterns(meth_df, mod_type='5mC'):
+    """Extract CpG positions and methylation within 500bp windows"""
     value_col = 'percent_m' if mod_type == '5mC' else 'percent_h'
     valid_col = 'count_valid_m' if mod_type == '5mC' else 'count_valid_h'
     
-    valid = chrom_df[chrom_df[valid_col] >= MIN_COVERAGE].copy()
-    if len(valid) < 2:
+    # Filter valid sites
+    valid = meth_df[meth_df[valid_col] >= MIN_COVERAGE].copy()
+    if len(valid) == 0:
         return []
     
-    valid = valid.sort_values('start').reset_index(drop=True)
     valid['center'] = (valid['start'] + valid['end']) / 2
     
-    pairs = []
-    for i in range(len(valid) - 1):
-        dist = valid.iloc[i+1]['center'] - valid.iloc[i]['center']
-        meth1, meth2 = valid.iloc[i][value_col], valid.iloc[i+1][value_col]
+    windows = []
+    for chrom in valid['chrom'].unique():
+        chrom_data = valid[valid['chrom'] == chrom].sort_values('center')
         
-        if dist > 0 and np.isfinite([dist, meth1, meth2]).all():
-            pairs.append({'distance': dist, 'meth1': meth1, 'meth2': meth2})
+        if len(chrom_data) < MIN_CPGS_PER_WINDOW:
+            continue
+        
+        # Create 500bp windows
+        chrom_start = int(chrom_data['center'].min())
+        chrom_end = int(chrom_data['center'].max())
+        
+        for win_start in range(chrom_start, chrom_end, WINDOW_SIZE):
+            win_end = win_start + WINDOW_SIZE
+            
+            # Get CpGs in this window
+            cpgs = chrom_data[(chrom_data['center'] >= win_start) & 
+                             (chrom_data['center'] < win_end)]
+            
+            if len(cpgs) >= MIN_CPGS_PER_WINDOW:
+                for _, cpg in cpgs.iterrows():
+                    # Position relative to window start (0-500)
+                    rel_pos = cpg['center'] - win_start
+                    windows.append({
+                        'chrom': chrom,
+                        'window_start': win_start,
+                        'position_in_window': rel_pos,
+                        'methylation': cpg[value_col],
+                        'abs_position': cpg['center']
+                    })
     
-    return pairs
+    return windows
 
 # Process samples
 sample_files = glob.glob(input_pattern)
@@ -69,134 +92,121 @@ for sample_file in sample_files:
         meth_df['chrom'] = 'chr' + meth_df['chrom'].astype(str)
     meth_df = meth_df[meth_df['chrom'].isin(chromosomes)]
     
-    pairs_5mc, pairs_5hmc = [], []
-    for chrom in tqdm(chromosomes, desc="Chrom", leave=False):
-        chrom_data = meth_df[meth_df['chrom'] == chrom]
-        if len(chrom_data) >= 10:
-            pairs_5mc.extend(extract_pairs(chrom_data, '5mC'))
-            pairs_5hmc.extend(extract_pairs(chrom_data, '5hmC'))
+    print("  Extracting 5mC patterns...")
+    windows_5mc = extract_window_patterns(meth_df, '5mC')
+    df_5mc = pd.DataFrame(windows_5mc) if windows_5mc else pd.DataFrame()
     
-    df_5mc = pd.DataFrame(pairs_5mc) if pairs_5mc else pd.DataFrame()
-    df_5hmc = pd.DataFrame(pairs_5hmc) if pairs_5hmc else pd.DataFrame()
+    print("  Extracting 5hmC patterns...")
+    windows_5hmc = extract_window_patterns(meth_df, '5hmC')
+    df_5hmc = pd.DataFrame(windows_5hmc) if windows_5hmc else pd.DataFrame()
+    
+    if len(df_5mc) > 0:
+        n_windows = df_5mc.groupby('window_start').size().shape[0]
+        print(f"  5mC:  {len(df_5mc):,} CpGs in {n_windows:,} windows")
+    if len(df_5hmc) > 0:
+        n_windows = df_5hmc.groupby('window_start').size().shape[0]
+        print(f"  5hmC: {len(df_5hmc):,} CpGs in {n_windows:,} windows")
+    print()
     
     all_data[sample_name] = {'5mC': df_5mc, '5hmC': df_5hmc}
     
-    if len(df_5mc) > 0:
-        print(f"  5mC:  {len(df_5mc):,} pairs | Distance: {df_5mc['distance'].median():.0f}bp (median)")
-    if len(df_5hmc) > 0:
-        print(f"  5hmC: {len(df_5hmc):,} pairs | Distance: {df_5hmc['distance'].median():.0f}bp (median)")
-    print()
-    
     # Individual sample visualization
-    fig = plt.figure(figsize=(20, 16))
-    gs = GridSpec(4, 3, figure=fig, hspace=0.35, wspace=0.3)
-    fig.suptitle(f'{sample_name} - Methylation Analysis', fontsize=16, fontweight='bold', y=0.995)
+    fig = plt.figure(figsize=(20, 14))
+    gs = GridSpec(3, 2, figure=fig, hspace=0.3, wspace=0.3)
+    fig.suptitle(f'{sample_name} - CpG Position vs Methylation in {WINDOW_SIZE}bp Windows', 
+                 fontsize=15, fontweight='bold', y=0.995)
     
-    # 5mC Analysis
+    # 5mC analysis
     if len(df_5mc) > 0:
-        # Distance distribution histogram
-        ax1 = fig.add_subplot(gs[0, :])
-        ax1.hist(df_5mc['distance'], bins=100, color='#e74c3c', alpha=0.7, edgecolor='black')
-        ax1.axvline(df_5mc['distance'].median(), color='darkred', linestyle='--', linewidth=2,
-                   label=f'Median: {df_5mc["distance"].median():.0f}bp')
-        ax1.set_xlabel('Distance to Adjacent CpG (bp)', fontsize=12, fontweight='bold')
-        ax1.set_ylabel('Frequency', fontsize=12, fontweight='bold')
-        ax1.set_title('5mC: Inter-CpG Distance Distribution', fontsize=13, fontweight='bold')
-        ax1.legend(fontsize=11)
-        ax1.grid(True, alpha=0.3, axis='y')
+        # 2D density: position vs methylation
+        ax1 = fig.add_subplot(gs[0, 0])
+        hb1 = ax1.hexbin(df_5mc['position_in_window'], df_5mc['methylation'],
+                        gridsize=50, cmap='Reds', mincnt=1, norm=LogNorm())
+        ax1.set_xlabel(f'Position in {WINDOW_SIZE}bp Window (bp)', fontsize=12, fontweight='bold')
+        ax1.set_ylabel('Methylation (%)', fontsize=12, fontweight='bold')
+        ax1.set_title('5mC: All Windows Overlaid', fontsize=13, fontweight='bold')
+        ax1.set_xlim(0, WINDOW_SIZE)
+        ax1.set_ylim(0, 100)
+        plt.colorbar(hb1, ax=ax1, label='CpG Count (log)')
+        ax1.grid(True, alpha=0.3)
         
-        # Zoomed histograms
-        for idx, (min_d, max_d) in enumerate([(0, 100), (100, 500), (500, 2000)]):
-            ax = fig.add_subplot(gs[1, idx])
-            subset = df_5mc[(df_5mc['distance'] > min_d) & (df_5mc['distance'] <= max_d)]
-            if len(subset) > 0:
-                ax.hist(subset['distance'], bins=30, color='#e74c3c', alpha=0.7, edgecolor='black')
-                ax.set_xlabel('Distance (bp)', fontweight='bold')
-                ax.set_ylabel('Frequency', fontweight='bold')
-                ax.set_title(f'5mC: {min_d}-{max_d}bp (n={len(subset):,})', fontweight='bold')
-                ax.grid(True, alpha=0.3, axis='y')
+        # Average methylation profile across windows
+        ax2 = fig.add_subplot(gs[0, 1])
+        bins = np.linspace(0, WINDOW_SIZE, 21)
+        df_5mc['pos_bin'] = pd.cut(df_5mc['position_in_window'], bins=bins, labels=bins[:-1])
+        profile = df_5mc.groupby('pos_bin')['methylation'].agg(['mean', 'std', 'count']).reset_index()
+        profile['pos_bin'] = profile['pos_bin'].astype(float)
         
-        # 2D density plots
-        for idx, (min_d, max_d, title) in enumerate([(0, 500, '≤500bp'), (0, 2000, '≤2kb'), (0, 10000, '≤10kb')]):
-            ax = fig.add_subplot(gs[2, idx])
-            subset = df_5mc[df_5mc['distance'] <= max_d]
-            if len(subset) > 10:
-                # Average methylation for each distance pair
-                subset['meth_avg'] = (subset['meth1'] + subset['meth2']) / 2
-                hb = ax.hexbin(subset['distance'], subset['meth_avg'], gridsize=40, 
-                              cmap='Reds', mincnt=1, norm=LogNorm())
-                ax.set_xlabel('Distance (bp)', fontweight='bold')
-                ax.set_ylabel('Methylation (%)', fontweight='bold')
-                ax.set_title(f'5mC: {title}', fontweight='bold')
-                ax.set_xlim(min_d, max_d)
-                ax.set_ylim(0, 100)
-                plt.colorbar(hb, ax=ax, label='Count')
+        ax2.plot(profile['pos_bin'], profile['mean'], 'o-', color='darkred', linewidth=2, markersize=6)
+        ax2.fill_between(profile['pos_bin'], 
+                         profile['mean'] - profile['std'],
+                         profile['mean'] + profile['std'],
+                         alpha=0.3, color='red')
+        ax2.set_xlabel(f'Position in {WINDOW_SIZE}bp Window (bp)', fontsize=12, fontweight='bold')
+        ax2.set_ylabel('Mean Methylation (%)', fontsize=12, fontweight='bold')
+        ax2.set_title('5mC: Average Profile ± SD', fontsize=13, fontweight='bold')
+        ax2.set_xlim(0, WINDOW_SIZE)
+        ax2.grid(True, alpha=0.3)
+        
+        # Example windows with high CpG density
+        ax3 = fig.add_subplot(gs[1, :])
+        window_counts = df_5mc.groupby('window_start').size().sort_values(ascending=False)
+        top_windows = window_counts.head(10).index
+        
+        for i, win_start in enumerate(top_windows):
+            win_data = df_5mc[df_5mc['window_start'] == win_start]
+            chrom = win_data['chrom'].iloc[0]
+            ax3.scatter(win_data['position_in_window'], win_data['methylation'],
+                       alpha=0.6, s=50, label=f'{chrom}:{win_start}')
+        
+        ax3.set_xlabel(f'Position in {WINDOW_SIZE}bp Window (bp)', fontsize=12, fontweight='bold')
+        ax3.set_ylabel('Methylation (%)', fontsize=12, fontweight='bold')
+        ax3.set_title('5mC: Top 10 CpG-Dense Windows', fontsize=13, fontweight='bold')
+        ax3.set_xlim(0, WINDOW_SIZE)
+        ax3.set_ylim(0, 100)
+        ax3.legend(fontsize=8, ncol=2)
+        ax3.grid(True, alpha=0.3)
     
-    # 5hmC Analysis
+    # 5hmC analysis
     if len(df_5hmc) > 0:
-        for idx, (min_d, max_d, title) in enumerate([(0, 500, '≤500bp'), (0, 2000, '≤2kb'), (0, 10000, '≤10kb')]):
-            ax = fig.add_subplot(gs[3, idx])
-            subset = df_5hmc[df_5hmc['distance'] <= max_d]
-            if len(subset) > 10:
-                subset['meth_avg'] = (subset['meth1'] + subset['meth2']) / 2
-                hb = ax.hexbin(subset['distance'], subset['meth_avg'], gridsize=40,
-                              cmap='Blues', mincnt=1, norm=LogNorm())
-                ax.set_xlabel('Distance (bp)', fontweight='bold')
-                ax.set_ylabel('Methylation (%)', fontweight='bold')
-                ax.set_title(f'5hmC: {title}', fontweight='bold')
-                ax.set_xlim(min_d, max_d)
-                ax.set_ylim(0, 100)
-                plt.colorbar(hb, ax=ax, label='Count')
+        ax4 = fig.add_subplot(gs[2, 0])
+        hb2 = ax4.hexbin(df_5hmc['position_in_window'], df_5hmc['methylation'],
+                        gridsize=50, cmap='Blues', mincnt=1, norm=LogNorm())
+        ax4.set_xlabel(f'Position in {WINDOW_SIZE}bp Window (bp)', fontsize=12, fontweight='bold')
+        ax4.set_ylabel('Methylation (%)', fontsize=12, fontweight='bold')
+        ax4.set_title('5hmC: All Windows Overlaid', fontsize=13, fontweight='bold')
+        ax4.set_xlim(0, WINDOW_SIZE)
+        ax4.set_ylim(0, 100)
+        plt.colorbar(hb2, ax=ax4, label='CpG Count (log)')
+        ax4.grid(True, alpha=0.3)
+        
+        ax5 = fig.add_subplot(gs[2, 1])
+        bins = np.linspace(0, WINDOW_SIZE, 21)
+        df_5hmc['pos_bin'] = pd.cut(df_5hmc['position_in_window'], bins=bins, labels=bins[:-1])
+        profile = df_5hmc.groupby('pos_bin')['methylation'].agg(['mean', 'std', 'count']).reset_index()
+        profile['pos_bin'] = profile['pos_bin'].astype(float)
+        
+        ax5.plot(profile['pos_bin'], profile['mean'], 'o-', color='darkblue', linewidth=2, markersize=6)
+        ax5.fill_between(profile['pos_bin'],
+                         profile['mean'] - profile['std'],
+                         profile['mean'] + profile['std'],
+                         alpha=0.3, color='blue')
+        ax5.set_xlabel(f'Position in {WINDOW_SIZE}bp Window (bp)', fontsize=12, fontweight='bold')
+        ax5.set_ylabel('Mean Methylation (%)', fontsize=12, fontweight='bold')
+        ax5.set_title('5hmC: Average Profile ± SD', fontsize=13, fontweight='bold')
+        ax5.set_xlim(0, WINDOW_SIZE)
+        ax5.grid(True, alpha=0.3)
     
-    plt.savefig(os.path.join(out_dir, f'{sample_name}_complete.png'), dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(out_dir, f'{sample_name}_window_patterns.png'), dpi=300, bbox_inches='tight')
     plt.close()
 
 # Cross-sample comparison
-print("Generating comparisons...")
+print("Generating cross-sample comparisons...")
 
-# Distance distribution comparison
-fig, axes = plt.subplots(2, 2, figsize=(18, 12))
-colors = plt.cm.Set3(np.linspace(0, 1, len(all_data)))
-
-for idx, (sample_name, data) in enumerate(all_data.items()):
-    if len(data['5mC']) > 0:
-        axes[0,0].hist(data['5mC']['distance'], bins=50, alpha=0.5, label=sample_name,
-                      color=colors[idx], edgecolor='black')
-        
-        subset = data['5mC'][data['5mC']['distance'] <= 2000]
-        if len(subset) > 0:
-            axes[0,1].hist(subset['distance'], bins=50, alpha=0.5, label=sample_name,
-                          color=colors[idx], edgecolor='black')
-    
-    if len(data['5hmC']) > 0:
-        axes[1,0].hist(data['5hmC']['distance'], bins=50, alpha=0.5, label=sample_name,
-                      color=colors[idx], edgecolor='black')
-        
-        subset = data['5hmC'][data['5hmC']['distance'] <= 2000]
-        if len(subset) > 0:
-            axes[1,1].hist(subset['distance'], bins=50, alpha=0.5, label=sample_name,
-                          color=colors[idx], edgecolor='black')
-
-axes[0,0].set_title('5mC: Full Range', fontweight='bold', fontsize=13)
-axes[0,1].set_title('5mC: ≤2kb', fontweight='bold', fontsize=13)
-axes[1,0].set_title('5hmC: Full Range', fontweight='bold', fontsize=13)
-axes[1,1].set_title('5hmC: ≤2kb', fontweight='bold', fontsize=13)
-
-for ax in axes.flat:
-    ax.set_xlabel('Distance (bp)', fontweight='bold')
-    ax.set_ylabel('Frequency', fontweight='bold')
-    ax.legend(fontsize=9)
-    ax.grid(True, alpha=0.3, axis='y')
-
-plt.tight_layout()
-plt.savefig(os.path.join(out_dir, 'comparison_histograms.png'), dpi=300, bbox_inches='tight')
-plt.close()
-
-# 2D density comparison (≤2kb)
 for mod_type in ['5mC', '5hmC']:
     n_samples = len(all_data)
     fig = plt.figure(figsize=(9*min(n_samples, 3), 7*((n_samples+2)//3)))
-    gs = GridSpec((n_samples+2)//3, min(n_samples, 3), figure=fig, hspace=0.3, wspace=0.3)
+    gs = GridSpec((n_samples+2)//3, min(n_samples, 3), figure=fig, hspace=0.35, wspace=0.3)
     
     for idx, (sample_name, data) in enumerate(all_data.items()):
         row, col = idx // 3, idx % 3
@@ -204,22 +214,54 @@ for mod_type in ['5mC', '5hmC']:
         
         df = data[mod_type]
         if len(df) > 0:
-            subset = df[df['distance'] <= 2000].copy()
-            if len(subset) > 10:
-                subset['meth_avg'] = (subset['meth1'] + subset['meth2']) / 2
-                hb = ax.hexbin(subset['distance'], subset['meth_avg'], gridsize=40,
-                              cmap='Reds' if mod_type=='5mC' else 'Blues',
-                              mincnt=1, norm=LogNorm(), vmin=1, vmax=500)
-                ax.set_title(f'{sample_name}\nn={len(subset):,}', fontweight='bold', fontsize=11)
-                ax.set_xlabel('Distance (bp)', fontweight='bold')
-                ax.set_ylabel('Methylation (%)', fontweight='bold')
-                ax.set_xlim(0, 2000)
-                ax.set_ylim(0, 100)
-                plt.colorbar(hb, ax=ax, label='Count')
+            hb = ax.hexbin(df['position_in_window'], df['methylation'],
+                          gridsize=40, cmap='Reds' if mod_type=='5mC' else 'Blues',
+                          mincnt=1, norm=LogNorm(), vmin=1, vmax=1000)
+            ax.set_title(f'{sample_name}\nn={len(df):,}', fontweight='bold', fontsize=11)
+            ax.set_xlabel('Position (bp)', fontweight='bold')
+            ax.set_ylabel('Methylation (%)', fontweight='bold')
+            ax.set_xlim(0, WINDOW_SIZE)
+            ax.set_ylim(0, 100)
+            plt.colorbar(hb, ax=ax, label='Count')
     
-    fig.suptitle(f'{mod_type}: Distance vs Methylation (≤2kb)', fontsize=14, fontweight='bold')
-    plt.savefig(os.path.join(out_dir, f'comparison_2d_{mod_type}.png'), dpi=300, bbox_inches='tight')
+    fig.suptitle(f'{mod_type}: Position vs Methylation in {WINDOW_SIZE}bp Windows', 
+                 fontsize=14, fontweight='bold', y=0.995)
+    plt.savefig(os.path.join(out_dir, f'comparison_{mod_type}.png'), dpi=300, bbox_inches='tight')
     plt.close()
+
+# Average profiles comparison
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 6))
+colors = plt.cm.Set3(np.linspace(0, 1, len(all_data)))
+
+for idx, (sample_name, data) in enumerate(all_data.items()):
+    for ax, mod_type in [(ax1, '5mC'), (ax2, '5hmC')]:
+        df = data[mod_type]
+        if len(df) > 0:
+            bins = np.linspace(0, WINDOW_SIZE, 21)
+            df['pos_bin'] = pd.cut(df['position_in_window'], bins=bins, labels=bins[:-1])
+            profile = df.groupby('pos_bin')['methylation'].mean().reset_index()
+            profile['pos_bin'] = profile['pos_bin'].astype(float)
+            
+            ax.plot(profile['pos_bin'], profile['methylation'], 
+                   'o-', label=sample_name, color=colors[idx], linewidth=2, markersize=5)
+
+ax1.set_xlabel(f'Position in {WINDOW_SIZE}bp Window (bp)', fontsize=12, fontweight='bold')
+ax1.set_ylabel('Mean Methylation (%)', fontsize=12, fontweight='bold')
+ax1.set_title('5mC: Average Profiles', fontsize=13, fontweight='bold')
+ax1.legend(fontsize=10)
+ax1.grid(True, alpha=0.3)
+ax1.set_xlim(0, WINDOW_SIZE)
+
+ax2.set_xlabel(f'Position in {WINDOW_SIZE}bp Window (bp)', fontsize=12, fontweight='bold')
+ax2.set_ylabel('Mean Methylation (%)', fontsize=12, fontweight='bold')
+ax2.set_title('5hmC: Average Profiles', fontsize=13, fontweight='bold')
+ax2.legend(fontsize=10)
+ax2.grid(True, alpha=0.3)
+ax2.set_xlim(0, WINDOW_SIZE)
+
+plt.tight_layout()
+plt.savefig(os.path.join(out_dir, 'comparison_profiles.png'), dpi=300, bbox_inches='tight')
+plt.close()
 
 # Summary statistics
 summary = []
@@ -227,26 +269,26 @@ for sample_name, data in all_data.items():
     for mod_type in ['5mC', '5hmC']:
         df = data[mod_type]
         if len(df) > 0:
-            for min_d, max_d in [(0, 100), (100, 500), (500, 2000), (2000, 10000)]:
-                subset = df[(df['distance'] > min_d) & (df['distance'] <= max_d)]
-                if len(subset) > 0:
-                    subset['meth_avg'] = (subset['meth1'] + subset['meth2']) / 2
-                    summary.append({
-                        'Sample': sample_name,
-                        'Modification': mod_type,
-                        'Distance_Range': f'{min_d}-{max_d}bp',
-                        'N_Pairs': len(subset),
-                        'Mean_Methylation_%': subset['meth_avg'].mean(),
-                        'Median_Distance_bp': subset['distance'].median()
-                    })
+            n_windows = df.groupby('window_start').size().shape[0]
+            avg_cpgs_per_window = df.groupby('window_start').size().mean()
+            
+            summary.append({
+                'Sample': sample_name,
+                'Modification': mod_type,
+                'Total_CpGs': len(df),
+                'N_Windows': n_windows,
+                'Avg_CpGs_per_Window': avg_cpgs_per_window,
+                'Mean_Methylation_%': df['methylation'].mean(),
+                'Std_Methylation_%': df['methylation'].std()
+            })
 
-pd.DataFrame(summary).to_csv(os.path.join(out_dir, 'summary_by_distance.csv'), index=False)
+pd.DataFrame(summary).to_csv(os.path.join(out_dir, 'window_summary.csv'), index=False)
 
 print(f"\n{'='*70}")
 print("COMPLETE")
 print(f"{'='*70}")
 print(f"\nOutput: {out_dir}/")
-print("  • [sample]_complete.png - Full analysis per sample")
-print("  • comparison_histograms.png - Distance distributions")
-print("  • comparison_2d_5mC.png, comparison_2d_5hmC.png")
-print("  • summary_by_distance.csv\n")
+print("  • [sample]_window_patterns.png - Per-sample analysis")
+print("  • comparison_5mC.png, comparison_5hmC.png - Side-by-side")
+print("  • comparison_profiles.png - Average profiles overlaid")
+print("  • window_summary.csv - Statistics\n")
