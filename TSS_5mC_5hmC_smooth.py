@@ -16,8 +16,8 @@ out_dir = os.path.join(base_dir, "tss_methylation")
 os.makedirs(out_dir, exist_ok=True)
 
 flank_size = 2000  # ±2kb flanking regions
-n_gene_bins = 60   # Number of bins for gene body (increased from 30 for smoother curve)
-n_flank_bins = 40  # Number of bins for flanking regions (increased from 20)
+n_gene_bins = 80   # Number of bins for gene body (increased from 30 for smoother curve)
+n_flank_bins = 80  # Number of bins for flanking regions (increased from 20)
 
 # Optional: Apply smoothing
 use_smoothing = True  # Set to False to disable
