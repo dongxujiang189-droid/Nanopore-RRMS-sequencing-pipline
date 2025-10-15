@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Co-methylation Distance Analysis - Adjusted for Nanopore Data
-Analyzes spatial correlation of methylation levels
+Methylation Density and Distance Analysis
+Calculates distances between methylated CpG sites and visualizes methylation density
 """
 
 import os
@@ -9,7 +9,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
-from scipy.stats import pearsonr
+import seaborn as sns
 import glob
 from tqdm import tqdm
 import warnings
@@ -20,169 +20,134 @@ warnings.filterwarnings('ignore')
 # -------------------
 base_dir = "/mnt/e/Data/seq_for_human_293t2/"
 input_pattern = os.path.join(base_dir, "modkit", "*_aligned_with_mod.region_mh.stats.tsv")
-out_dir = os.path.join(base_dir, "comethylation_analysis")
+out_dir = os.path.join(base_dir, "methylation_density")
 os.makedirs(out_dir, exist_ok=True)
 
-# Adjusted parameters for nanopore data
-MIN_COVERAGE = 10      # Minimum valid reads
-MAX_DISTANCE = 5000    # Maximum distance between sites (bp)
-MIN_DISTANCE = 10      # Minimum distance
-WINDOW_SIZE = 10000    # Window size for calculating correlations
+# Parameters
+MIN_COVERAGE = 10           # Minimum valid reads
+METHYLATION_THRESHOLD = 50  # Consider site "methylated" if >50%
+DENSITY_WINDOW = 100000     # 100kb windows for density calculation
+MAX_DISTANCE_PLOT = 10000   # Maximum distance to plot (bp)
 
-distance_bins = [0, 50, 100, 200, 500, 1000, 2000, 5000]
 chromosomes = [f'chr{i}' for i in range(1, 23)] + ['chrX']
 
 # -------------------
-# Data Exploration
+# Analysis Functions
 # -------------------
-def explore_data_distribution(meth_df, sample_name):
-    """Analyze methylation distribution in the data"""
-    print(f"\n{'='*70}")
-    print(f"DATA DISTRIBUTION: {sample_name}")
-    print('='*70)
-    
-    # Overall statistics
-    print(f"\nTotal sites: {len(meth_df):,}")
-    
-    # 5mC statistics
-    valid_5mc = meth_df[meth_df['count_valid_m'] >= MIN_COVERAGE]
-    print(f"\n5mC Statistics (coverage ≥ {MIN_COVERAGE}):")
-    print(f"  Sites: {len(valid_5mc):,}")
-    print(f"  Mean: {valid_5mc['percent_m'].mean():.2f}%")
-    print(f"  Median: {valid_5mc['percent_m'].median():.2f}%")
-    print(f"  Std: {valid_5mc['percent_m'].std():.2f}%")
-    print(f"  Min: {valid_5mc['percent_m'].min():.2f}%")
-    print(f"  Max: {valid_5mc['percent_m'].max():.2f}%")
-    print(f"  25th percentile: {valid_5mc['percent_m'].quantile(0.25):.2f}%")
-    print(f"  75th percentile: {valid_5mc['percent_m'].quantile(0.75):.2f}%")
-    
-    # 5hmC statistics
-    valid_5hmc = meth_df[meth_df['count_valid_h'] >= MIN_COVERAGE]
-    print(f"\n5hmC Statistics (coverage ≥ {MIN_COVERAGE}):")
-    print(f"  Sites: {len(valid_5hmc):,}")
-    print(f"  Mean: {valid_5hmc['percent_h'].mean():.2f}%")
-    print(f"  Median: {valid_5hmc['percent_h'].median():.2f}%")
-    print(f"  Std: {valid_5hmc['percent_h'].std():.2f}%")
-    print(f"  Min: {valid_5hmc['percent_h'].min():.2f}%")
-    print(f"  Max: {valid_5hmc['percent_h'].max():.2f}%")
-    print(f"  25th percentile: {valid_5hmc['percent_h'].quantile(0.25):.2f}%")
-    print(f"  75th percentile: {valid_5hmc['percent_h'].quantile(0.75):.2f}%")
-    
-    return valid_5mc, valid_5hmc
-
-# -------------------
-# Correlation Calculation
-# -------------------
-def calculate_window_correlation(sites, mod_type='5mC'):
+def calculate_inter_site_distances(sites_df, mod_type='5mC'):
     """
-    Calculate correlation between nearby sites using sliding windows
-    Returns R² (squared Pearson correlation) vs distance
+    Calculate distances between consecutive methylated CpG sites
     """
     if mod_type == '5mC':
         value_col = 'percent_m'
+        valid_col = 'count_valid_m'
     else:
         value_col = 'percent_h'
+        valid_col = 'count_valid_h'
+    
+    # Filter for methylated sites (above threshold and good coverage)
+    methylated = sites_df[
+        (sites_df[value_col] >= METHYLATION_THRESHOLD) &
+        (sites_df[valid_col] >= MIN_COVERAGE)
+    ].copy()
+    
+    if len(methylated) < 2:
+        return pd.DataFrame(), methylated
     
     # Sort by position
-    sites = sites.sort_values('start').reset_index(drop=True)
-    n_sites = len(sites)
+    methylated = methylated.sort_values('start').reset_index(drop=True)
+    methylated['center'] = (methylated['start'] + methylated['end']) / 2
     
-    correlations = []
-    
-    # For each site, correlate with nearby sites
-    for i in range(n_sites):
-        site_i = sites.iloc[i]
-        pos_i = (site_i['start'] + site_i['end']) / 2
-        val_i = site_i[value_col]
-        
-        if pd.isna(val_i):
-            continue
-        
-        # Collect nearby sites
-        nearby_vals = []
-        nearby_dists = []
-        
-        for j in range(i+1, min(i+100, n_sites)):  # Look at next 100 sites
-            site_j = sites.iloc[j]
-            pos_j = (site_j['start'] + site_j['end']) / 2
-            distance = abs(pos_j - pos_i)
-            
-            if distance > MAX_DISTANCE:
-                break
-            
-            if distance < MIN_DISTANCE:
-                continue
-            
-            val_j = site_j[value_col]
-            if pd.notna(val_j):
-                nearby_vals.append(val_j)
-                nearby_dists.append(distance)
-        
-        # Calculate correlation with each nearby site
-        for k, (val_j, dist) in enumerate(zip(nearby_vals, nearby_dists)):
-            correlations.append({
-                'distance': dist,
-                'val1': val_i,
-                'val2': val_j,
-                'diff': abs(val_i - val_j)
-            })
-    
-    return pd.DataFrame(correlations)
-
-def calculate_binned_correlation(corr_df, distance_bins):
-    """Calculate R² for each distance bin"""
-    if len(corr_df) == 0:
-        return pd.DataFrame()
-    
-    corr_df['distance_bin'] = pd.cut(corr_df['distance'], bins=distance_bins, 
-                                      include_lowest=True)
-    
-    results = []
-    for bin_label in corr_df['distance_bin'].cat.categories:
-        bin_data = corr_df[corr_df['distance_bin'] == bin_label]
-        
-        if len(bin_data) < 3:
-            continue
-        
-        # Calculate Pearson R between val1 and val2
-        vals1 = bin_data['val1'].values
-        vals2 = bin_data['val2'].values
-        
-        if len(vals1) > 2 and np.std(vals1) > 0 and np.std(vals2) > 0:
-            r, pval = pearsonr(vals1, vals2)
-            r2 = r**2
-        else:
-            r2 = 0
-        
-        results.append({
-            'distance_bin': str(bin_label),
-            'mean_distance': bin_data['distance'].mean(),
-            'r2': r2,
-            'n_pairs': len(bin_data),
-            'mean_diff': bin_data['diff'].mean()
+    # Calculate distance to next methylated site
+    distances = []
+    for i in range(len(methylated) - 1):
+        dist = methylated.iloc[i+1]['center'] - methylated.iloc[i]['center']
+        distances.append({
+            'distance': dist,
+            'chrom': methylated.iloc[i]['chrom'],
+            'pos': methylated.iloc[i]['center'],
+            'methylation1': methylated.iloc[i][value_col],
+            'methylation2': methylated.iloc[i+1][value_col]
         })
     
-    return pd.DataFrame(results)
+    return pd.DataFrame(distances), methylated
+
+def calculate_methylation_density(sites_df, mod_type='5mC', window_size=DENSITY_WINDOW):
+    """
+    Calculate methylation density (number of methylated sites per window)
+    """
+    if mod_type == '5mC':
+        value_col = 'percent_m'
+        valid_col = 'count_valid_m'
+    else:
+        value_col = 'percent_h'
+        valid_col = 'count_valid_h'
+    
+    # All valid sites
+    valid_sites = sites_df[sites_df[valid_col] >= MIN_COVERAGE].copy()
+    valid_sites['center'] = (valid_sites['start'] + valid_sites['end']) / 2
+    
+    # Methylated sites
+    methylated = sites_df[
+        (sites_df[value_col] >= METHYLATION_THRESHOLD) &
+        (sites_df[valid_col] >= MIN_COVERAGE)
+    ].copy()
+    methylated['center'] = (methylated['start'] + methylated['end']) / 2
+    
+    # Create windows across chromosome
+    chrom_start = valid_sites['start'].min()
+    chrom_end = valid_sites['end'].max()
+    
+    windows = []
+    for win_start in range(int(chrom_start), int(chrom_end), window_size):
+        win_end = win_start + window_size
+        
+        # Count sites in window
+        total_sites = len(valid_sites[
+            (valid_sites['center'] >= win_start) &
+            (valid_sites['center'] < win_end)
+        ])
+        
+        methylated_sites = len(methylated[
+            (methylated['center'] >= win_start) &
+            (methylated['center'] < win_end)
+        ])
+        
+        if total_sites > 0:
+            windows.append({
+                'window_start': win_start,
+                'window_center': (win_start + win_end) / 2,
+                'total_sites': total_sites,
+                'methylated_sites': methylated_sites,
+                'density': methylated_sites / window_size * 1e6,  # Sites per Mb
+                'pct_methylated': 100 * methylated_sites / total_sites if total_sites > 0 else 0
+            })
+    
+    return pd.DataFrame(windows)
 
 # -------------------
-# Process Samples
+# Load and Process Samples
 # -------------------
 sample_files = glob.glob(input_pattern)
 if not sample_files:
     raise FileNotFoundError(f"No files found: {input_pattern}")
 
 print(f"{'='*70}")
-print("CO-METHYLATION DISTANCE ANALYSIS")
+print("METHYLATION DENSITY AND DISTANCE ANALYSIS")
 print('='*70)
 print(f"\nParameters:")
+print(f"  Methylation threshold: ≥{METHYLATION_THRESHOLD}%")
 print(f"  Minimum coverage: {MIN_COVERAGE} reads")
-print(f"  Distance range: {MIN_DISTANCE} - {MAX_DISTANCE} bp")
-print(f"\nProcessing {len(sample_files)} samples...")
+print(f"  Density window: {DENSITY_WINDOW/1000:.0f} kb")
+print(f"\nProcessing {len(sample_files)} samples...\n")
 
 all_results = {}
 
 for sample_file in sample_files:
     sample_name = os.path.basename(sample_file).replace("_aligned_with_mod.region_mh.stats.tsv", "")
+    print(f"\n{'='*70}")
+    print(f"Sample: {sample_name}")
+    print('='*70)
     
     # Load data
     meth_df = pd.read_csv(sample_file, sep='\t')
@@ -194,56 +159,89 @@ for sample_file in sample_files:
     
     meth_df = meth_df[meth_df['chrom'].isin(chromosomes)]
     
-    # Explore data distribution
-    valid_5mc, valid_5hmc = explore_data_distribution(meth_df, sample_name)
+    print(f"Total sites: {len(meth_df):,}")
     
-    # Process each chromosome
-    print(f"\nCalculating correlations...")
+    # Analyze 5mC
+    print("\n5mC Analysis:")
+    sites_5mc = meth_df[meth_df['count_valid_m'] >= MIN_COVERAGE]
+    methylated_5mc = len(meth_df[
+        (meth_df['percent_m'] >= METHYLATION_THRESHOLD) &
+        (meth_df['count_valid_m'] >= MIN_COVERAGE)
+    ])
+    print(f"  Valid sites: {len(sites_5mc):,}")
+    print(f"  Methylated sites (≥{METHYLATION_THRESHOLD}%): {methylated_5mc:,} ({100*methylated_5mc/len(sites_5mc):.1f}%)")
+    print(f"  Mean methylation: {sites_5mc['percent_m'].mean():.2f}%")
     
-    all_corr_5mc = []
-    all_corr_5hmc = []
+    # Analyze 5hmC
+    print("\n5hmC Analysis:")
+    sites_5hmc = meth_df[meth_df['count_valid_h'] >= MIN_COVERAGE]
+    methylated_5hmc = len(meth_df[
+        (meth_df['percent_h'] >= METHYLATION_THRESHOLD) &
+        (meth_df['count_valid_h'] >= MIN_COVERAGE)
+    ])
+    print(f"  Valid sites: {len(sites_5hmc):,}")
+    print(f"  Methylated sites (≥{METHYLATION_THRESHOLD}%): {methylated_5hmc:,} ({100*methylated_5hmc/len(sites_5hmc):.1f}%)")
+    print(f"  Mean methylation: {sites_5hmc['percent_h'].mean():.2f}%")
+    
+    # Calculate distances and density for each chromosome
+    print("\nProcessing chromosomes...")
+    
+    all_distances_5mc = []
+    all_distances_5hmc = []
+    all_density_5mc = []
+    all_density_5hmc = []
+    all_methylated_sites_5mc = []
+    all_methylated_sites_5hmc = []
     
     for chrom in tqdm(chromosomes, desc="Chromosomes"):
-        chrom_5mc = valid_5mc[valid_5mc['chrom'] == chrom]
-        chrom_5hmc = valid_5hmc[valid_5hmc['chrom'] == chrom]
+        chrom_data = meth_df[meth_df['chrom'] == chrom]
         
-        if len(chrom_5mc) >= 10:
-            corr_5mc = calculate_window_correlation(chrom_5mc, mod_type='5mC')
-            if len(corr_5mc) > 0:
-                corr_5mc['chrom'] = chrom
-                all_corr_5mc.append(corr_5mc)
+        if len(chrom_data) < 10:
+            continue
         
-        if len(chrom_5hmc) >= 10:
-            corr_5hmc = calculate_window_correlation(chrom_5hmc, mod_type='5hmC')
-            if len(corr_5hmc) > 0:
-                corr_5hmc['chrom'] = chrom
-                all_corr_5hmc.append(corr_5hmc)
+        # 5mC distances
+        dist_5mc, meth_sites_5mc = calculate_inter_site_distances(chrom_data, mod_type='5mC')
+        if len(dist_5mc) > 0:
+            all_distances_5mc.append(dist_5mc)
+            meth_sites_5mc['chrom'] = chrom
+            all_methylated_sites_5mc.append(meth_sites_5mc)
+        
+        # 5hmC distances
+        dist_5hmc, meth_sites_5hmc = calculate_inter_site_distances(chrom_data, mod_type='5hmC')
+        if len(dist_5hmc) > 0:
+            all_distances_5hmc.append(dist_5hmc)
+            meth_sites_5hmc['chrom'] = chrom
+            all_methylated_sites_5hmc.append(meth_sites_5hmc)
+        
+        # 5mC density
+        dens_5mc = calculate_methylation_density(chrom_data, mod_type='5mC')
+        if len(dens_5mc) > 0:
+            dens_5mc['chrom'] = chrom
+            all_density_5mc.append(dens_5mc)
+        
+        # 5hmC density
+        dens_5hmc = calculate_methylation_density(chrom_data, mod_type='5hmC')
+        if len(dens_5hmc) > 0:
+            dens_5hmc['chrom'] = chrom
+            all_density_5hmc.append(dens_5hmc)
     
     # Combine results
-    if all_corr_5mc:
-        combined_5mc = pd.concat(all_corr_5mc, ignore_index=True)
-        binned_5mc = calculate_binned_correlation(combined_5mc, distance_bins)
-        print(f"\n5mC: {len(combined_5mc):,} pairs analyzed")
-    else:
-        combined_5mc = pd.DataFrame()
-        binned_5mc = pd.DataFrame()
-        print(f"\n5mC: No pairs found")
-    
-    if all_corr_5hmc:
-        combined_5hmc = pd.concat(all_corr_5hmc, ignore_index=True)
-        binned_5hmc = calculate_binned_correlation(combined_5hmc, distance_bins)
-        print(f"5hmC: {len(combined_5hmc):,} pairs analyzed")
-    else:
-        combined_5hmc = pd.DataFrame()
-        binned_5hmc = pd.DataFrame()
-        print(f"5hmC: No pairs found")
-    
-    all_results[sample_name] = {
-        '5mC_pairs': combined_5mc,
-        '5hmC_pairs': combined_5hmc,
-        '5mC_binned': binned_5mc,
-        '5hmC_binned': binned_5hmc
+    results = {
+        'distances_5mc': pd.concat(all_distances_5mc) if all_distances_5mc else pd.DataFrame(),
+        'distances_5hmc': pd.concat(all_distances_5hmc) if all_distances_5hmc else pd.DataFrame(),
+        'density_5mc': pd.concat(all_density_5mc) if all_density_5mc else pd.DataFrame(),
+        'density_5hmc': pd.concat(all_density_5hmc) if all_density_5hmc else pd.DataFrame(),
+        'methylated_sites_5mc': pd.concat(all_methylated_sites_5mc) if all_methylated_sites_5mc else pd.DataFrame(),
+        'methylated_sites_5hmc': pd.concat(all_methylated_sites_5hmc) if all_methylated_sites_5hmc else pd.DataFrame()
     }
+    
+    print(f"\nResults:")
+    print(f"  5mC distances: {len(results['distances_5mc']):,}")
+    print(f"  5hmC distances: {len(results['distances_5hmc']):,}")
+    print(f"  5mC density windows: {len(results['density_5mc']):,}")
+    print(f"  5hmC density windows: {len(results['density_5hmc']):,}")
+    
+    all_results[sample_name] = results
 
 # -------------------
 # Generate Plots
@@ -255,177 +253,229 @@ print('='*70)
 for sample_name, results in all_results.items():
     print(f"\nPlotting {sample_name}...")
     
-    fig = plt.figure(figsize=(18, 12))
-    gs = GridSpec(3, 2, figure=fig, hspace=0.35, wspace=0.3)
+    fig = plt.figure(figsize=(20, 12))
+    gs = GridSpec(3, 2, figure=fig, hspace=0.3, wspace=0.3)
     
     # ========== 5mC Plots ==========
-    if len(results['5mC_pairs']) > 0:
-        data_5mc = results['5mC_pairs']
-        binned_5mc = results['5mC_binned']
+    # Plot 1: Distance distribution
+    ax1 = fig.add_subplot(gs[0, 0])
+    if len(results['distances_5mc']) > 0:
+        distances = results['distances_5mc']['distance']
+        distances_plot = distances[distances <= MAX_DISTANCE_PLOT]
         
-        # Plot 1: Scatter plot with density
-        ax1 = fig.add_subplot(gs[0, 0])
-        h = ax1.hexbin(data_5mc['distance'], data_5mc['diff'], 
-                      gridsize=80, cmap='YlOrRd', mincnt=1,
-                      extent=[0, MAX_DISTANCE, 0, data_5mc['diff'].max()])
-        plt.colorbar(h, ax=ax1, label='Density')
-        
-        ax1.set_xlabel('Distance (bp)', fontsize=12, fontweight='bold')
-        ax1.set_ylabel('Methylation Difference (%)', fontsize=12, fontweight='bold')
-        ax1.set_title(f'{sample_name} - 5mC Methylation Difference vs Distance\n(n={len(data_5mc):,} pairs)', 
+        ax1.hist(distances_plot, bins=100, color='#ff6b6b', alpha=0.7, edgecolor='black')
+        ax1.axvline(distances_plot.median(), color='red', linestyle='--', 
+                   linewidth=2, label=f'Median: {distances_plot.median():.0f} bp')
+        ax1.set_xlabel('Distance to Next Methylated Site (bp)', fontsize=12, fontweight='bold')
+        ax1.set_ylabel('Frequency', fontsize=12, fontweight='bold')
+        ax1.set_title(f'{sample_name} - 5mC Inter-site Distances\n(n={len(distances):,} intervals)', 
                      fontsize=12, fontweight='bold')
-        ax1.grid(True, alpha=0.3)
+        ax1.legend(fontsize=10)
+        ax1.grid(True, alpha=0.3, axis='y')
+    
+    # Plot 2: Density across genome
+    ax2 = fig.add_subplot(gs[1, 0])
+    if len(results['density_5mc']) > 0:
+        for chrom in chromosomes[:5]:  # First 5 chromosomes
+            chrom_dens = results['density_5mc'][results['density_5mc']['chrom'] == chrom]
+            if len(chrom_dens) > 0:
+                ax2.plot(chrom_dens['window_center']/1e6, chrom_dens['density'], 
+                        alpha=0.7, linewidth=1.5, label=chrom)
         
-        # Plot 2: Distribution of differences by distance
-        ax2 = fig.add_subplot(gs[1, 0])
-        data_5mc['distance_bin'] = pd.cut(data_5mc['distance'], bins=distance_bins)
-        bp_data = []
-        bp_labels = []
+        ax2.set_xlabel('Position (Mb)', fontsize=12, fontweight='bold')
+        ax2.set_ylabel('Methylation Density\n(sites per Mb)', fontsize=12, fontweight='bold')
+        ax2.set_title('5mC Density Along Chromosomes', fontsize=12, fontweight='bold')
+        ax2.legend(fontsize=9, ncol=2)
+        ax2.grid(True, alpha=0.3)
+    
+    # Plot 3: Cumulative distance distribution
+    ax3 = fig.add_subplot(gs[2, 0])
+    if len(results['distances_5mc']) > 0:
+        distances = results['distances_5mc']['distance']
+        distances_sorted = np.sort(distances[distances <= MAX_DISTANCE_PLOT])
+        cumulative = np.arange(1, len(distances_sorted) + 1) / len(distances_sorted)
         
-        for i, cat in enumerate(data_5mc['distance_bin'].cat.categories):
-            bin_data = data_5mc[data_5mc['distance_bin'] == cat]['diff']
-            if len(bin_data) > 0:
-                bp_data.append(bin_data)
-                bp_labels.append(f"{int(distance_bins[i])}-\n{int(distance_bins[i+1])}")
-        
-        if bp_data:
-            bp = ax2.boxplot(bp_data, labels=bp_labels, showfliers=False, patch_artist=True)
-            for patch in bp['boxes']:
-                patch.set_facecolor('#ff9999')
-                patch.set_alpha(0.7)
-        
-        ax2.set_xlabel('Distance (bp)', fontsize=12, fontweight='bold')
-        ax2.set_ylabel('Methylation Difference (%)', fontsize=12, fontweight='bold')
-        ax2.set_title('5mC: Difference by Distance', fontsize=12, fontweight='bold')
-        ax2.grid(True, alpha=0.3, axis='y')
-        
-        # Plot 3: R² by distance
-        ax3 = fig.add_subplot(gs[2, 0])
-        if len(binned_5mc) > 0:
-            ax3.plot(binned_5mc['mean_distance'], binned_5mc['r2'], 
-                    'o-', linewidth=2.5, markersize=10, color='red', alpha=0.8)
-            
-            for _, row in binned_5mc.iterrows():
-                ax3.text(row['mean_distance'], row['r2'] + 0.02, 
-                        f"n={int(row['n_pairs'])}", 
-                        ha='center', fontsize=8, alpha=0.7)
+        ax3.plot(distances_sorted, cumulative, linewidth=2, color='#ff6b6b')
+        ax3.axhline(0.5, color='gray', linestyle='--', alpha=0.5)
+        ax3.axvline(distances_sorted[int(len(distances_sorted)*0.5)], 
+                   color='red', linestyle='--', alpha=0.5)
         
         ax3.set_xlabel('Distance (bp)', fontsize=12, fontweight='bold')
-        ax3.set_ylabel('R² (Correlation)', fontsize=12, fontweight='bold')
-        ax3.set_title('5mC: Correlation vs Distance', fontsize=12, fontweight='bold')
-        ax3.set_xscale('log')
+        ax3.set_ylabel('Cumulative Probability', fontsize=12, fontweight='bold')
+        ax3.set_title('5mC: Cumulative Distance Distribution', fontsize=12, fontweight='bold')
         ax3.grid(True, alpha=0.3)
-        ax3.set_ylim([0, 1])
+        ax3.set_xscale('log')
     
     # ========== 5hmC Plots ==========
-    if len(results['5hmC_pairs']) > 0:
-        data_5hmc = results['5hmC_pairs']
-        binned_5hmc = results['5hmC_binned']
+    # Plot 4: Distance distribution
+    ax4 = fig.add_subplot(gs[0, 1])
+    if len(results['distances_5hmc']) > 0:
+        distances = results['distances_5hmc']['distance']
+        distances_plot = distances[distances <= MAX_DISTANCE_PLOT]
         
-        # Plot 4: Scatter plot
-        ax4 = fig.add_subplot(gs[0, 1])
-        h = ax4.hexbin(data_5hmc['distance'], data_5hmc['diff'], 
-                      gridsize=80, cmap='YlOrRd', mincnt=1,
-                      extent=[0, MAX_DISTANCE, 0, data_5hmc['diff'].max()])
-        plt.colorbar(h, ax=ax4, label='Density')
-        
-        ax4.set_xlabel('Distance (bp)', fontsize=12, fontweight='bold')
-        ax4.set_ylabel('Methylation Difference (%)', fontsize=12, fontweight='bold')
-        ax4.set_title(f'{sample_name} - 5hmC Methylation Difference vs Distance\n(n={len(data_5hmc):,} pairs)', 
+        ax4.hist(distances_plot, bins=100, color='#4ecdc4', alpha=0.7, edgecolor='black')
+        ax4.axvline(distances_plot.median(), color='blue', linestyle='--', 
+                   linewidth=2, label=f'Median: {distances_plot.median():.0f} bp')
+        ax4.set_xlabel('Distance to Next Methylated Site (bp)', fontsize=12, fontweight='bold')
+        ax4.set_ylabel('Frequency', fontsize=12, fontweight='bold')
+        ax4.set_title(f'{sample_name} - 5hmC Inter-site Distances\n(n={len(distances):,} intervals)', 
                      fontsize=12, fontweight='bold')
-        ax4.grid(True, alpha=0.3)
+        ax4.legend(fontsize=10)
+        ax4.grid(True, alpha=0.3, axis='y')
+    
+    # Plot 5: Density across genome
+    ax5 = fig.add_subplot(gs[1, 1])
+    if len(results['density_5hmc']) > 0:
+        for chrom in chromosomes[:5]:
+            chrom_dens = results['density_5hmc'][results['density_5hmc']['chrom'] == chrom]
+            if len(chrom_dens) > 0:
+                ax5.plot(chrom_dens['window_center']/1e6, chrom_dens['density'], 
+                        alpha=0.7, linewidth=1.5, label=chrom)
         
-        # Plot 5: Distribution
-        ax5 = fig.add_subplot(gs[1, 1])
-        data_5hmc['distance_bin'] = pd.cut(data_5hmc['distance'], bins=distance_bins)
-        bp_data = []
-        bp_labels = []
+        ax5.set_xlabel('Position (Mb)', fontsize=12, fontweight='bold')
+        ax5.set_ylabel('Methylation Density\n(sites per Mb)', fontsize=12, fontweight='bold')
+        ax5.set_title('5hmC Density Along Chromosomes', fontsize=12, fontweight='bold')
+        ax5.legend(fontsize=9, ncol=2)
+        ax5.grid(True, alpha=0.3)
+    
+    # Plot 6: Cumulative distance distribution
+    ax6 = fig.add_subplot(gs[2, 1])
+    if len(results['distances_5hmc']) > 0:
+        distances = results['distances_5hmc']['distance']
+        distances_sorted = np.sort(distances[distances <= MAX_DISTANCE_PLOT])
+        cumulative = np.arange(1, len(distances_sorted) + 1) / len(distances_sorted)
         
-        for i, cat in enumerate(data_5hmc['distance_bin'].cat.categories):
-            bin_data = data_5hmc[data_5hmc['distance_bin'] == cat]['diff']
-            if len(bin_data) > 0:
-                bp_data.append(bin_data)
-                bp_labels.append(f"{int(distance_bins[i])}-\n{int(distance_bins[i+1])}")
-        
-        if bp_data:
-            bp = ax5.boxplot(bp_data, labels=bp_labels, showfliers=False, patch_artist=True)
-            for patch in bp['boxes']:
-                patch.set_facecolor('#9999ff')
-                patch.set_alpha(0.7)
-        
-        ax5.set_xlabel('Distance (bp)', fontsize=12, fontweight='bold')
-        ax5.set_ylabel('Methylation Difference (%)', fontsize=12, fontweight='bold')
-        ax5.set_title('5hmC: Difference by Distance', fontsize=12, fontweight='bold')
-        ax5.grid(True, alpha=0.3, axis='y')
-        
-        # Plot 6: R² by distance
-        ax6 = fig.add_subplot(gs[2, 1])
-        if len(binned_5hmc) > 0:
-            ax6.plot(binned_5hmc['mean_distance'], binned_5hmc['r2'], 
-                    'o-', linewidth=2.5, markersize=10, color='blue', alpha=0.8)
-            
-            for _, row in binned_5hmc.iterrows():
-                ax6.text(row['mean_distance'], row['r2'] + 0.02, 
-                        f"n={int(row['n_pairs'])}", 
-                        ha='center', fontsize=8, alpha=0.7)
+        ax6.plot(distances_sorted, cumulative, linewidth=2, color='#4ecdc4')
+        ax6.axhline(0.5, color='gray', linestyle='--', alpha=0.5)
+        ax6.axvline(distances_sorted[int(len(distances_sorted)*0.5)], 
+                   color='blue', linestyle='--', alpha=0.5)
         
         ax6.set_xlabel('Distance (bp)', fontsize=12, fontweight='bold')
-        ax6.set_ylabel('R² (Correlation)', fontsize=12, fontweight='bold')
-        ax6.set_title('5hmC: Correlation vs Distance', fontsize=12, fontweight='bold')
-        ax6.set_xscale('log')
+        ax6.set_ylabel('Cumulative Probability', fontsize=12, fontweight='bold')
+        ax6.set_title('5hmC: Cumulative Distance Distribution', fontsize=12, fontweight='bold')
         ax6.grid(True, alpha=0.3)
-        ax6.set_ylim([0, 1])
+        ax6.set_xscale('log')
     
-    plt.savefig(os.path.join(out_dir, f'{sample_name}_comethylation.png'), 
+    plt.savefig(os.path.join(out_dir, f'{sample_name}_methylation_density.png'), 
                 dpi=300, bbox_inches='tight')
     plt.close()
 
 # -------------------
-# Sample Comparison
+# Sample Comparison Plot
 # -------------------
 print("\nGenerating comparison plot...")
 
-fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
 colors = plt.cm.Set2(np.linspace(0, 1, len(all_results)))
 
+# 5mC distance distributions
 for idx, (sample_name, results) in enumerate(all_results.items()):
-    # 5mC
-    if len(results['5mC_binned']) > 0:
-        data = results['5mC_binned']
-        ax1.plot(data['mean_distance'], data['r2'], 
-                'o-', linewidth=2.5, markersize=8, 
-                label=sample_name, color=colors[idx], alpha=0.8)
-    
-    # 5hmC
-    if len(results['5hmC_binned']) > 0:
-        data = results['5hmC_binned']
-        ax2.plot(data['mean_distance'], data['r2'], 
-                'o-', linewidth=2.5, markersize=8,
-                label=sample_name, color=colors[idx], alpha=0.8)
+    if len(results['distances_5mc']) > 0:
+        distances = results['distances_5mc']['distance']
+        distances = distances[distances <= MAX_DISTANCE_PLOT]
+        ax1.hist(distances, bins=50, alpha=0.5, label=sample_name, 
+                color=colors[idx], edgecolor='black')
 
 ax1.set_xlabel('Distance (bp)', fontsize=12, fontweight='bold')
-ax1.set_ylabel('R²', fontsize=12, fontweight='bold')
-ax1.set_title('5mC Correlation vs Distance', fontsize=13, fontweight='bold')
+ax1.set_ylabel('Frequency', fontsize=12, fontweight='bold')
+ax1.set_title('5mC: Inter-site Distance Comparison', fontsize=13, fontweight='bold')
 ax1.legend(fontsize=10)
-ax1.grid(True, alpha=0.3)
-ax1.set_xscale('log')
-ax1.set_ylim([0, 1])
+ax1.grid(True, alpha=0.3, axis='y')
+
+# 5hmC distance distributions
+for idx, (sample_name, results) in enumerate(all_results.items()):
+    if len(results['distances_5hmc']) > 0:
+        distances = results['distances_5hmc']['distance']
+        distances = distances[distances <= MAX_DISTANCE_PLOT]
+        ax2.hist(distances, bins=50, alpha=0.5, label=sample_name, 
+                color=colors[idx], edgecolor='black')
 
 ax2.set_xlabel('Distance (bp)', fontsize=12, fontweight='bold')
-ax2.set_ylabel('R²', fontsize=12, fontweight='bold')
-ax2.set_title('5hmC Correlation vs Distance', fontsize=13, fontweight='bold')
+ax2.set_ylabel('Frequency', fontsize=12, fontweight='bold')
+ax2.set_title('5hmC: Inter-site Distance Comparison', fontsize=13, fontweight='bold')
 ax2.legend(fontsize=10)
-ax2.grid(True, alpha=0.3)
-ax2.set_xscale('log')
-ax2.set_ylim([0, 1])
+ax2.grid(True, alpha=0.3, axis='y')
+
+# 5mC median distances
+medians_5mc = []
+samples = []
+for sample_name, results in all_results.items():
+    if len(results['distances_5mc']) > 0:
+        samples.append(sample_name)
+        medians_5mc.append(results['distances_5mc']['distance'].median())
+
+if medians_5mc:
+    ax3.bar(range(len(samples)), medians_5mc, color=colors[:len(samples)], 
+           alpha=0.8, edgecolor='black')
+    ax3.set_xticks(range(len(samples)))
+    ax3.set_xticklabels(samples, rotation=45, ha='right')
+    ax3.set_ylabel('Median Distance (bp)', fontsize=12, fontweight='bold')
+    ax3.set_title('5mC: Median Inter-site Distance', fontsize=13, fontweight='bold')
+    ax3.grid(True, alpha=0.3, axis='y')
+
+# 5hmC median distances
+medians_5hmc = []
+samples = []
+for sample_name, results in all_results.items():
+    if len(results['distances_5hmc']) > 0:
+        samples.append(sample_name)
+        medians_5hmc.append(results['distances_5hmc']['distance'].median())
+
+if medians_5hmc:
+    ax4.bar(range(len(samples)), medians_5hmc, color=colors[:len(samples)], 
+           alpha=0.8, edgecolor='black')
+    ax4.set_xticks(range(len(samples)))
+    ax4.set_xticklabels(samples, rotation=45, ha='right')
+    ax4.set_ylabel('Median Distance (bp)', fontsize=12, fontweight='bold')
+    ax4.set_title('5hmC: Median Inter-site Distance', fontsize=13, fontweight='bold')
+    ax4.grid(True, alpha=0.3, axis='y')
 
 plt.tight_layout()
 plt.savefig(os.path.join(out_dir, 'sample_comparison.png'), dpi=300, bbox_inches='tight')
 plt.close()
 
-print(f"\n{'='*70}")
-print("ANALYSIS COMPLETE")
-print('='*70)
+# -------------------
+# Save Statistics
+# -------------------
+stats_list = []
+for sample_name, results in all_results.items():
+    if len(results['distances_5mc']) > 0:
+        dist_5mc = results['distances_5mc']['distance']
+        stats_list.append({
+            'Sample': sample_name,
+            'Modification': '5mC',
+            'N_methylated_sites': len(results['methylated_sites_5mc']),
+            'N_distances': len(dist_5mc),
+            'Median_distance_bp': dist_5mc.median(),
+            'Mean_distance_bp': dist_5mc.mean(),
+            'Min_distance_bp': dist_5mc.min(),
+            'Max_distance_bp': dist_5mc.max()
+        })
+    
+    if len(results['distances_5hmc']) > 0:
+        dist_5hmc = results['distances_5hmc']['distance']
+        stats_list.append({
+            'Sample': sample_name,
+            'Modification': '5hmC',
+            'N_methylated_sites': len(results['methylated_sites_5hmc']),
+            'N_distances': len(dist_5hmc),
+            'Median_distance_bp': dist_5hmc.median(),
+            'Mean_distance_bp': dist_5hmc.mean(),
+            'Min_distance_bp': dist_5hmc.min(),
+            'Max_distance_bp': dist_5hmc.max()
+        })
+
+stats_df = pd.DataFrame(stats_list)
+stats_df.to_csv(os.path.join(out_dir, 'methylation_distance_stats.csv'), index=False)
+
+print("\n" + "="*70)
+print("SUMMARY STATISTICS")
+print("="*70)
+print(stats_df.to_string(index=False))
+print("="*70)
+
+print(f"\n✓ Analysis Complete!")
 print(f"\nResults saved to: {out_dir}/")
-print(f"  - [sample]_comethylation.png")
+print(f"  - [sample]_methylation_density.png")
 print(f"  - sample_comparison.png")
+print(f"  - methylation_distance_stats.csv")
