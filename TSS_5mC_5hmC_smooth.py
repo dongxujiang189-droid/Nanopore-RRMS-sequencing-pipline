@@ -233,8 +233,8 @@ for sample_file in sample_files:
 # -------------------
 # Calculate log2 fold change vs control
 # -------------------
-# Use first sample as control (or specify: control_name = "barcode04")
-control_name = list(all_profiles.keys())[0]
+# Use first sample as control (or specify: control_name = "barcode07")
+control_name = list(all_profiles.keys())[3]
 print(f"\nCalculating log2 fold change using {control_name} as control")
 
 log2fc_profiles = {}
