@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Methylation Density and Distance Analysis
-Adjacent CpG distance analysis with 500bp cutoff
+Methylation Density Comparison Analysis
+Adjacent CpG distance with 500bp cutoff + cross-sample comparison
 """
 
 import os
@@ -9,6 +9,8 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
+from matplotlib.gridspec import GridSpec
+import seaborn as sns
 import glob
 from tqdm import tqdm
 import warnings
@@ -22,21 +24,15 @@ input_pattern = os.path.join(base_dir, "modkit", "*_aligned_with_mod.region_mh.s
 out_dir = os.path.join(base_dir, "methylation_density_2d")
 os.makedirs(out_dir, exist_ok=True)
 
-# Parameters
 MIN_COVERAGE = 10
-DISTANCE_CUTOFF = 500  # Only include adjacent sites within 500bp
+DISTANCE_CUTOFF = 500
 chromosomes = [f'chr{i}' for i in range(1, 23)] + ['chrX']
-
-# Threshold for defining "methylated" sites
 THRESHOLD_METHOD = 'mean'
-# FIXED_THRESHOLD_5MC = 50.0  # Uncomment to use fixed threshold
-# FIXED_THRESHOLD_5HMC = 10.0
 
 # -------------------
-# Calculate Global Thresholds
+# Calculate Thresholds
 # -------------------
 print("Calculating thresholds...")
-
 sample_files = glob.glob(input_pattern)
 if not sample_files:
     raise FileNotFoundError(f"No files found: {input_pattern}")
@@ -50,93 +46,84 @@ for sample_file in tqdm(sample_files, desc="Loading"):
         meth_df.rename(columns={'#chrom': 'chrom'}, inplace=True)
     if not str(meth_df['chrom'].iloc[0]).startswith('chr'):
         meth_df['chrom'] = 'chr' + meth_df['chrom'].astype(str)
-    
     meth_df = meth_df[meth_df['chrom'].isin(chromosomes)]
     
-    valid_5mc = meth_df[meth_df['count_valid_m'] >= MIN_COVERAGE]['percent_m'].dropna()
-    valid_5hmc = meth_df[meth_df['count_valid_h'] >= MIN_COVERAGE]['percent_h'].dropna()
-    
-    all_5mc_values.extend(valid_5mc.tolist())
-    all_5hmc_values.extend(valid_5hmc.tolist())
+    all_5mc_values.extend(meth_df[meth_df['count_valid_m'] >= MIN_COVERAGE]['percent_m'].dropna().tolist())
+    all_5hmc_values.extend(meth_df[meth_df['count_valid_h'] >= MIN_COVERAGE]['percent_h'].dropna().tolist())
 
-all_5mc_values = np.array(all_5mc_values)
-all_5hmc_values = np.array(all_5hmc_values)
-
-if 'FIXED_THRESHOLD_5MC' in locals():
-    THRESHOLD_5MC = FIXED_THRESHOLD_5MC
-    THRESHOLD_5HMC = FIXED_THRESHOLD_5HMC
-elif THRESHOLD_METHOD == 'mean':
-    THRESHOLD_5MC = all_5mc_values.mean()
-    THRESHOLD_5HMC = all_5hmc_values.mean()
-elif THRESHOLD_METHOD == 'median':
-    THRESHOLD_5MC = np.median(all_5mc_values)
-    THRESHOLD_5HMC = np.median(all_5hmc_values)
-else:
-    THRESHOLD_5MC = all_5mc_values.mean()
-    THRESHOLD_5HMC = all_5hmc_values.mean()
-
-print(f"Thresholds: 5mC={THRESHOLD_5MC:.2f}%, 5hmC={THRESHOLD_5HMC:.2f}%")
-print(f"Distance cutoff: {DISTANCE_CUTOFF}bp\n")
+THRESHOLD_5MC = np.mean(all_5mc_values)
+THRESHOLD_5HMC = np.mean(all_5hmc_values)
+print(f"Thresholds: 5mC={THRESHOLD_5MC:.2f}%, 5hmC={THRESHOLD_5HMC:.2f}%\n")
 
 # -------------------
 # Analysis Function
 # -------------------
 def extract_adjacent_pairs_per_chromosome(chrom_df, mod_type='5mC', threshold=None):
-    """
-    For each chromosome:
-    1. Number methylated sites as 1, 2, 3, ...
-    2. Calculate distance between consecutive sites
-    3. Keep only distances ≤ 500bp
-    4. Return pairs of (distance, methylation_value)
-    """
     if mod_type == '5mC':
-        value_col = 'percent_m'
-        valid_col = 'count_valid_m'
+        value_col, valid_col = 'percent_m', 'count_valid_m'
         use_threshold = threshold if threshold is not None else THRESHOLD_5MC
     else:
-        value_col = 'percent_h'
-        valid_col = 'count_valid_h'
+        value_col, valid_col = 'percent_h', 'count_valid_h'
         use_threshold = threshold if threshold is not None else THRESHOLD_5HMC
     
-    # Filter for methylated sites above threshold
     methylated = chrom_df[
         (chrom_df[value_col] >= use_threshold) &
         (chrom_df[valid_col] >= MIN_COVERAGE)
     ].copy()
     
     if len(methylated) < 2:
-        return []
+        return [], 0, 0, 0  # pairs, n_sites, n_distances_total, n_distances_kept
     
-    # Sort by position and number them 1, 2, 3, ...
     methylated = methylated.sort_values('start').reset_index(drop=True)
     methylated['center'] = (methylated['start'] + methylated['end']) / 2
-    methylated['site_number'] = range(1, len(methylated) + 1)
     
     pairs = []
-    # Calculate distance between consecutive numbered sites
+    distances_all = []
     for i in range(len(methylated) - 1):
         dist = methylated.iloc[i+1]['center'] - methylated.iloc[i]['center']
+        distances_all.append(dist)
         meth1 = methylated.iloc[i][value_col]
         meth2 = methylated.iloc[i+1][value_col]
         
-        # Only keep if distance ≤ 500bp
         if 0 < dist <= DISTANCE_CUTOFF and np.isfinite(dist) and np.isfinite(meth1) and np.isfinite(meth2):
-            # Store both methylation values for this distance
             pairs.append({'distance': dist, 'methylation': meth1})
             pairs.append({'distance': dist, 'methylation': meth2})
     
-    return pairs
+    return pairs, len(methylated), len(distances_all), len(pairs)//2
+
+def calculate_density_metrics(df, mod_type='5mC'):
+    """Calculate quantitative density metrics"""
+    if len(df) == 0:
+        return {}
+    
+    # Define high-density region: short distance + high methylation
+    high_meth = df[df['methylation'] >= 75]
+    short_dist = df[df['distance'] <= 200]
+    high_density = df[(df['methylation'] >= 75) & (df['distance'] <= 200)]
+    
+    metrics = {
+        'median_distance': df['distance'].median(),
+        'mean_distance': df['distance'].mean(),
+        'median_methylation': df['methylation'].median(),
+        'mean_methylation': df['methylation'].mean(),
+        'n_pairs': len(df),
+        'pct_high_meth': 100 * len(high_meth) / len(df),
+        'pct_short_dist': 100 * len(short_dist) / len(df),
+        'pct_high_density': 100 * len(high_density) / len(df),  # Key metric
+        'density_score': (high_density['methylation'].mean() if len(high_density) > 0 else 0) * len(high_density) / len(df)
+    }
+    return metrics
 
 # -------------------
 # Process All Samples
 # -------------------
 print("Processing samples...")
+all_sample_data = {}
 
 for sample_file in sample_files:
     sample_name = os.path.basename(sample_file).replace("_aligned_with_mod.region_mh.stats.tsv", "")
     print(f"\n{sample_name}")
     
-    # Load data
     meth_df = pd.read_csv(sample_file, sep='\t')
     if '#chrom' in meth_df.columns:
         meth_df.rename(columns={'#chrom': 'chrom'}, inplace=True)
@@ -144,155 +131,239 @@ for sample_file in sample_files:
         meth_df['chrom'] = 'chr' + meth_df['chrom'].astype(str)
     meth_df = meth_df[meth_df['chrom'].isin(chromosomes)]
     
-    # Collect pairs per chromosome
     all_pairs_5mc = []
     all_pairs_5hmc = []
+    total_sites_5mc = 0
+    total_sites_5hmc = 0
+    total_dist_5mc = 0
+    total_dist_5hmc = 0
+    kept_dist_5mc = 0
+    kept_dist_5hmc = 0
     
     for chrom in tqdm(chromosomes, desc="Chromosomes", leave=False):
         chrom_data = meth_df[meth_df['chrom'] == chrom]
         if len(chrom_data) < 10:
             continue
         
-        pairs_5mc = extract_adjacent_pairs_per_chromosome(chrom_data, mod_type='5mC')
-        pairs_5hmc = extract_adjacent_pairs_per_chromosome(chrom_data, mod_type='5hmC')
+        pairs_5mc, sites_5mc, dist_total_5mc, dist_kept_5mc = extract_adjacent_pairs_per_chromosome(chrom_data, mod_type='5mC')
+        pairs_5hmc, sites_5hmc, dist_total_5hmc, dist_kept_5hmc = extract_adjacent_pairs_per_chromosome(chrom_data, mod_type='5hmC')
         
         all_pairs_5mc.extend(pairs_5mc)
         all_pairs_5hmc.extend(pairs_5hmc)
+        total_sites_5mc += sites_5mc
+        total_sites_5hmc += sites_5hmc
+        total_dist_5mc += dist_total_5mc
+        total_dist_5hmc += dist_total_5hmc
+        kept_dist_5mc += dist_kept_5mc
+        kept_dist_5hmc += dist_kept_5hmc
     
-    print(f"  5mC: {len(all_pairs_5mc):,} pairs | 5hmC: {len(all_pairs_5hmc):,} pairs")
+    df_5mc = pd.DataFrame(all_pairs_5mc) if all_pairs_5mc else pd.DataFrame()
+    df_5hmc = pd.DataFrame(all_pairs_5hmc) if all_pairs_5hmc else pd.DataFrame()
+    
+    # Diagnostic output
+    print(f"  5mC: {total_sites_5mc:,} methylated sites (≥{THRESHOLD_5MC:.1f}%)")
+    print(f"       {total_dist_5mc:,} total adjacent pairs")
+    print(f"       {kept_dist_5mc:,} pairs within {DISTANCE_CUTOFF}bp ({100*kept_dist_5mc/total_dist_5mc if total_dist_5mc > 0 else 0:.1f}%)")
+    print(f"       {len(df_5mc):,} final data points")
+    
+    print(f"  5hmC: {total_sites_5hmc:,} methylated sites (≥{THRESHOLD_5HMC:.1f}%)")
+    print(f"        {total_dist_5hmc:,} total adjacent pairs")
+    print(f"        {kept_dist_5hmc:,} pairs within {DISTANCE_CUTOFF}bp ({100*kept_dist_5hmc/total_dist_5hmc if total_dist_5hmc > 0 else 0:.1f}%)")
+    print(f"        {len(df_5hmc):,} final data points")
+    
+    all_sample_data[sample_name] = {
+        '5mC': df_5mc,
+        '5hmC': df_5hmc,
+        'metrics_5mC': calculate_density_metrics(df_5mc, '5mC'),
+        'metrics_5hmC': calculate_density_metrics(df_5hmc, '5hmC')
+    }
     
     # -------------------
-    # Create 2D Density Plots
+    # Individual Sample Plots
     # -------------------
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 7))
     
-    # 5mC Plot
-    if len(all_pairs_5mc) > 0:
-        df_5mc = pd.DataFrame(all_pairs_5mc)
-        
+    if len(df_5mc) > 0:
         hb1 = ax1.hexbin(df_5mc['distance'], df_5mc['methylation'], 
                        gridsize=50, cmap='Reds', mincnt=1, norm=LogNorm())
-        ax1.set_xlabel('Distance to Adjacent Methylated CpG (bp)', fontsize=13, fontweight='bold')
-        ax1.set_ylabel('Methylation Level (%)', fontsize=13, fontweight='bold')
-        ax1.set_title(f'5mC: Distance vs Methylation Density\n{sample_name}', 
-                     fontsize=14, fontweight='bold')
+        ax1.set_xlabel('Distance to Adjacent CpG (bp)', fontsize=13, fontweight='bold')
+        ax1.set_ylabel('Methylation (%)', fontsize=13, fontweight='bold')
+        ax1.set_title(f'5mC: {sample_name}', fontsize=14, fontweight='bold')
         ax1.set_xlim(0, DISTANCE_CUTOFF)
+        plt.colorbar(hb1, ax=ax1, label='Count (log)')
         
-        cb1 = plt.colorbar(hb1, ax=ax1)
-        cb1.set_label('Count (log scale)', fontsize=11, fontweight='bold')
-        
-        median_dist = df_5mc['distance'].median()
-        median_meth = df_5mc['methylation'].median()
-        mean_meth = df_5mc['methylation'].mean()
-        stats_text = f'Median distance: {median_dist:.0f} bp\nMedian meth: {median_meth:.1f}%\nMean meth: {mean_meth:.1f}%\nN pairs: {len(df_5mc):,}'
-        ax1.text(0.02, 0.98, stats_text, transform=ax1.transAxes, 
-                fontsize=10, verticalalignment='top',
-                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
-        
+        m = all_sample_data[sample_name]['metrics_5mC']
+        stats = f"High-density: {m['pct_high_density']:.1f}%\nMed dist: {m['median_distance']:.0f}bp\nMean meth: {m['mean_methylation']:.1f}%\nN={m['n_pairs']:,}"
+        ax1.text(0.02, 0.98, stats, transform=ax1.transAxes, va='top',
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8), fontsize=9)
         ax1.grid(True, alpha=0.3)
     
-    # 5hmC Plot
-    if len(all_pairs_5hmc) > 0:
-        df_5hmc = pd.DataFrame(all_pairs_5hmc)
-        
+    if len(df_5hmc) > 0:
         hb2 = ax2.hexbin(df_5hmc['distance'], df_5hmc['methylation'], 
                        gridsize=50, cmap='Blues', mincnt=1, norm=LogNorm())
-        ax2.set_xlabel('Distance to Adjacent Methylated CpG (bp)', fontsize=13, fontweight='bold')
-        ax2.set_ylabel('Methylation Level (%)', fontsize=13, fontweight='bold')
-        ax2.set_title(f'5hmC: Distance vs Methylation Density\n{sample_name}', 
-                     fontsize=14, fontweight='bold')
+        ax2.set_xlabel('Distance to Adjacent CpG (bp)', fontsize=13, fontweight='bold')
+        ax2.set_ylabel('Methylation (%)', fontsize=13, fontweight='bold')
+        ax2.set_title(f'5hmC: {sample_name}', fontsize=14, fontweight='bold')
         ax2.set_xlim(0, DISTANCE_CUTOFF)
+        plt.colorbar(hb2, ax=ax2, label='Count (log)')
         
-        cb2 = plt.colorbar(hb2, ax=ax2)
-        cb2.set_label('Count (log scale)', fontsize=11, fontweight='bold')
-        
-        median_dist = df_5hmc['distance'].median()
-        median_meth = df_5hmc['methylation'].median()
-        mean_meth = df_5hmc['methylation'].mean()
-        stats_text = f'Median distance: {median_dist:.0f} bp\nMedian meth: {median_meth:.1f}%\nMean meth: {mean_meth:.1f}%\nN pairs: {len(df_5hmc):,}'
-        ax2.text(0.02, 0.98, stats_text, transform=ax2.transAxes, 
-                fontsize=10, verticalalignment='top',
-                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
-        
+        m = all_sample_data[sample_name]['metrics_5hmC']
+        stats = f"High-density: {m['pct_high_density']:.1f}%\nMed dist: {m['median_distance']:.0f}bp\nMean meth: {m['mean_methylation']:.1f}%\nN={m['n_pairs']:,}"
+        ax2.text(0.02, 0.98, stats, transform=ax2.transAxes, va='top',
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8), fontsize=9)
         ax2.grid(True, alpha=0.3)
     
     plt.tight_layout()
-    plt.savefig(os.path.join(out_dir, f'{sample_name}_adjacent_density.png'), 
-                dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(out_dir, f'{sample_name}_density.png'), dpi=300, bbox_inches='tight')
     plt.close()
+
+# -------------------
+# Cross-Sample Comparison Plots
+# -------------------
+print("\nGenerating comparison plots...")
+
+# 1. Side-by-side 2D density comparison
+n_samples = len(all_sample_data)
+fig = plt.figure(figsize=(9*min(n_samples, 3), 7*((n_samples+2)//3)))
+gs = GridSpec((n_samples+2)//3, min(n_samples, 3), figure=fig, hspace=0.3, wspace=0.3)
+
+for idx, (sample_name, data) in enumerate(all_sample_data.items()):
+    row, col = idx // 3, idx % 3
+    ax = fig.add_subplot(gs[row, col])
     
-    # -------------------
-    # Stratified Distance Histograms
-    # -------------------
-    fig, axes = plt.subplots(2, 2, figsize=(16, 14))
+    df = data['5mC']
+    if len(df) > 0:
+        hb = ax.hexbin(df['distance'], df['methylation'], 
+                      gridsize=40, cmap='Reds', mincnt=1, norm=LogNorm(), vmin=1, vmax=1000)
+        ax.set_title(f'{sample_name}\nHD: {data["metrics_5mC"]["pct_high_density"]:.1f}%', 
+                    fontweight='bold', fontsize=11)
+        ax.set_xlabel('Distance (bp)', fontweight='bold')
+        ax.set_ylabel('Methylation (%)', fontweight='bold')
+        ax.set_xlim(0, DISTANCE_CUTOFF)
+        ax.set_ylim(0, 100)
+        plt.colorbar(hb, ax=ax, label='Count')
+
+fig.suptitle('5mC Density Comparison (High-Density = ≥75% meth & ≤200bp dist)', 
+             fontsize=14, fontweight='bold', y=0.995)
+plt.savefig(os.path.join(out_dir, 'comparison_5mC_all_samples.png'), dpi=300, bbox_inches='tight')
+plt.close()
+
+# Same for 5hmC
+fig = plt.figure(figsize=(9*min(n_samples, 3), 7*((n_samples+2)//3)))
+gs = GridSpec((n_samples+2)//3, min(n_samples, 3), figure=fig, hspace=0.3, wspace=0.3)
+
+for idx, (sample_name, data) in enumerate(all_sample_data.items()):
+    row, col = idx // 3, idx % 3
+    ax = fig.add_subplot(gs[row, col])
     
-    # 5mC by methylation ranges
-    if len(all_pairs_5mc) > 0:
-        df_5mc = pd.DataFrame(all_pairs_5mc)
-        
-        df_high = df_5mc[df_5mc['methylation'] >= 75]
-        if len(df_high) > 10:
-            axes[0,0].hist(df_high['distance'], bins=50, color='darkred', alpha=0.7, edgecolor='black')
-            axes[0,0].set_title(f'5mC: High Methylation (≥75%)\nn={len(df_high):,}', fontweight='bold')
-            axes[0,0].set_xlabel('Distance (bp)', fontweight='bold')
-            axes[0,0].set_ylabel('Frequency', fontweight='bold')
-            axes[0,0].axvline(df_high['distance'].median(), color='red', linestyle='--', 
-                            label=f'Median: {df_high["distance"].median():.0f} bp')
-            axes[0,0].legend()
-            axes[0,0].grid(True, alpha=0.3)
-            axes[0,0].set_xlim(0, DISTANCE_CUTOFF)
-        
-        df_low = df_5mc[df_5mc['methylation'] < 75]
-        if len(df_low) > 10:
-            axes[0,1].hist(df_low['distance'], bins=50, color='lightcoral', alpha=0.7, edgecolor='black')
-            axes[0,1].set_title(f'5mC: Lower Methylation (<75%)\nn={len(df_low):,}', fontweight='bold')
-            axes[0,1].set_xlabel('Distance (bp)', fontweight='bold')
-            axes[0,1].set_ylabel('Frequency', fontweight='bold')
-            axes[0,1].axvline(df_low['distance'].median(), color='red', linestyle='--',
-                            label=f'Median: {df_low["distance"].median():.0f} bp')
-            axes[0,1].legend()
-            axes[0,1].grid(True, alpha=0.3)
-            axes[0,1].set_xlim(0, DISTANCE_CUTOFF)
-    
-    # 5hmC by methylation ranges
-    if len(all_pairs_5hmc) > 0:
-        df_5hmc = pd.DataFrame(all_pairs_5hmc)
-        
-        median_5hmc = df_5hmc['methylation'].median()
-        df_high = df_5hmc[df_5hmc['methylation'] >= median_5hmc]
-        if len(df_high) > 10:
-            axes[1,0].hist(df_high['distance'], bins=50, color='darkblue', alpha=0.7, edgecolor='black')
-            axes[1,0].set_title(f'5hmC: High Methylation (≥{median_5hmc:.1f}%)\nn={len(df_high):,}', fontweight='bold')
-            axes[1,0].set_xlabel('Distance (bp)', fontweight='bold')
-            axes[1,0].set_ylabel('Frequency', fontweight='bold')
-            axes[1,0].axvline(df_high['distance'].median(), color='blue', linestyle='--',
-                            label=f'Median: {df_high["distance"].median():.0f} bp')
-            axes[1,0].legend()
-            axes[1,0].grid(True, alpha=0.3)
-            axes[1,0].set_xlim(0, DISTANCE_CUTOFF)
-        
-        df_low = df_5hmc[df_5hmc['methylation'] < median_5hmc]
-        if len(df_low) > 10:
-            axes[1,1].hist(df_low['distance'], bins=50, color='lightblue', alpha=0.7, edgecolor='black')
-            axes[1,1].set_title(f'5hmC: Lower Methylation (<{median_5hmc:.1f}%)\nn={len(df_low):,}', fontweight='bold')
-            axes[1,1].set_xlabel('Distance (bp)', fontweight='bold')
-            axes[1,1].set_ylabel('Frequency', fontweight='bold')
-            axes[1,1].axvline(df_low['distance'].median(), color='blue', linestyle='--',
-                            label=f'Median: {df_low["distance"].median():.0f} bp')
-            axes[1,1].legend()
-            axes[1,1].grid(True, alpha=0.3)
-            axes[1,1].set_xlim(0, DISTANCE_CUTOFF)
-    
-    fig.suptitle(f'{sample_name} - Distance Distribution by Methylation Level (≤{DISTANCE_CUTOFF}bp)', 
-                 fontsize=15, fontweight='bold', y=0.995)
-    plt.tight_layout()
-    plt.savefig(os.path.join(out_dir, f'{sample_name}_distance_stratified.png'), 
-                dpi=300, bbox_inches='tight')
-    plt.close()
+    df = data['5hmC']
+    if len(df) > 0:
+        hb = ax.hexbin(df['distance'], df['methylation'], 
+                      gridsize=40, cmap='Blues', mincnt=1, norm=LogNorm(), vmin=1, vmax=1000)
+        ax.set_title(f'{sample_name}\nHD: {data["metrics_5hmC"]["pct_high_density"]:.1f}%', 
+                    fontweight='bold', fontsize=11)
+        ax.set_xlabel('Distance (bp)', fontweight='bold')
+        ax.set_ylabel('Methylation (%)', fontweight='bold')
+        ax.set_xlim(0, DISTANCE_CUTOFF)
+        ax.set_ylim(0, 100)
+        plt.colorbar(hb, ax=ax, label='Count')
+
+fig.suptitle('5hmC Density Comparison', fontsize=14, fontweight='bold', y=0.995)
+plt.savefig(os.path.join(out_dir, 'comparison_5hmC_all_samples.png'), dpi=300, bbox_inches='tight')
+plt.close()
+
+# 2. Quantitative metrics comparison
+metrics_5mc = pd.DataFrame([data['metrics_5mC'] for data in all_sample_data.values()])
+metrics_5mc.insert(0, 'Sample', list(all_sample_data.keys()))
+
+metrics_5hmc = pd.DataFrame([data['metrics_5hmC'] for data in all_sample_data.values()])
+metrics_5hmc.insert(0, 'Sample', list(all_sample_data.keys()))
+
+# Save metrics
+metrics_5mc.to_csv(os.path.join(out_dir, 'metrics_5mC.csv'), index=False)
+metrics_5hmc.to_csv(os.path.join(out_dir, 'metrics_5hmC.csv'), index=False)
+
+# 3. Bar chart comparison of key metrics
+fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+
+samples = list(all_sample_data.keys())
+colors = plt.cm.Set3(np.linspace(0, 1, len(samples)))
+
+# 5mC metrics
+axes[0,0].bar(samples, metrics_5mc['pct_high_density'], color=colors, edgecolor='black')
+axes[0,0].set_ylabel('% High-Density Pairs', fontweight='bold')
+axes[0,0].set_title('5mC: High-Density % (≥75% meth, ≤200bp)', fontweight='bold')
+axes[0,0].tick_params(axis='x', rotation=45)
+axes[0,0].grid(axis='y', alpha=0.3)
+
+axes[0,1].bar(samples, metrics_5mc['mean_methylation'], color=colors, edgecolor='black')
+axes[0,1].set_ylabel('Mean Methylation (%)', fontweight='bold')
+axes[0,1].set_title('5mC: Mean Methylation', fontweight='bold')
+axes[0,1].tick_params(axis='x', rotation=45)
+axes[0,1].grid(axis='y', alpha=0.3)
+
+axes[0,2].bar(samples, metrics_5mc['median_distance'], color=colors, edgecolor='black')
+axes[0,2].set_ylabel('Median Distance (bp)', fontweight='bold')
+axes[0,2].set_title('5mC: Median Adjacent Distance', fontweight='bold')
+axes[0,2].tick_params(axis='x', rotation=45)
+axes[0,2].grid(axis='y', alpha=0.3)
+
+# 5hmC metrics
+axes[1,0].bar(samples, metrics_5hmc['pct_high_density'], color=colors, edgecolor='black')
+axes[1,0].set_ylabel('% High-Density Pairs', fontweight='bold')
+axes[1,0].set_title('5hmC: High-Density %', fontweight='bold')
+axes[1,0].tick_params(axis='x', rotation=45)
+axes[1,0].grid(axis='y', alpha=0.3)
+
+axes[1,1].bar(samples, metrics_5hmc['mean_methylation'], color=colors, edgecolor='black')
+axes[1,1].set_ylabel('Mean Methylation (%)', fontweight='bold')
+axes[1,1].set_title('5hmC: Mean Methylation', fontweight='bold')
+axes[1,1].tick_params(axis='x', rotation=45)
+axes[1,1].grid(axis='y', alpha=0.3)
+
+axes[1,2].bar(samples, metrics_5hmc['median_distance'], color=colors, edgecolor='black')
+axes[1,2].set_ylabel('Median Distance (bp)', fontweight='bold')
+axes[1,2].set_title('5hmC: Median Adjacent Distance', fontweight='bold')
+axes[1,2].tick_params(axis='x', rotation=45)
+axes[1,2].grid(axis='y', alpha=0.3)
+
+plt.tight_layout()
+plt.savefig(os.path.join(out_dir, 'comparison_metrics_barplots.png'), dpi=300, bbox_inches='tight')
+plt.close()
+
+# 4. Heatmap of normalized metrics
+metrics_norm = metrics_5mc[['pct_high_density', 'mean_methylation', 'median_distance', 'pct_high_meth']].copy()
+metrics_norm = (metrics_norm - metrics_norm.min()) / (metrics_norm.max() - metrics_norm.min())
+metrics_norm.insert(0, 'Sample', samples)
+
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+
+# 5mC heatmap
+data_5mc = metrics_5mc[['pct_high_density', 'mean_methylation', 'median_distance', 'pct_high_meth']].T
+sns.heatmap(data_5mc, annot=True, fmt='.1f', cmap='Reds', ax=ax1, 
+            xticklabels=samples, yticklabels=['High-Density %', 'Mean Meth %', 'Median Dist (bp)', 'High Meth %'],
+            cbar_kws={'label': 'Value'})
+ax1.set_title('5mC Metrics Heatmap', fontweight='bold', fontsize=13)
+
+# 5hmC heatmap
+data_5hmc = metrics_5hmc[['pct_high_density', 'mean_methylation', 'median_distance', 'pct_high_meth']].T
+sns.heatmap(data_5hmc, annot=True, fmt='.1f', cmap='Blues', ax=ax2,
+            xticklabels=samples, yticklabels=['High-Density %', 'Mean Meth %', 'Median Dist (bp)', 'High Meth %'],
+            cbar_kws={'label': 'Value'})
+ax2.set_title('5hmC Metrics Heatmap', fontweight='bold', fontsize=13)
+
+plt.tight_layout()
+plt.savefig(os.path.join(out_dir, 'comparison_metrics_heatmap.png'), dpi=300, bbox_inches='tight')
+plt.close()
 
 print("\n" + "="*70)
 print("COMPLETE")
 print("="*70)
 print(f"\nOutput: {out_dir}/")
-print("  • [sample]_adjacent_density.png")
-print("  • [sample]_distance_stratified.png")
+print("  Individual: [sample]_density.png")
+print("  Comparison: comparison_5mC_all_samples.png")
+print("  Comparison: comparison_5hmC_all_samples.png")
+print("  Comparison: comparison_metrics_barplots.png")
+print("  Comparison: comparison_metrics_heatmap.png")
+print("  Data: metrics_5mC.csv, metrics_5hmC.csv")
+print("\nKey metric: High-Density % = pairs with ≥75% methylation AND ≤200bp distance")
