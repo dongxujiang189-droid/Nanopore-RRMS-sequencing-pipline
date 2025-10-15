@@ -25,34 +25,50 @@ os.makedirs(out_dir, exist_ok=True)
 
 # Parameters
 MIN_COVERAGE = 10           # Minimum valid reads
-METHYLATION_THRESHOLD = 50  # Consider site "methylated" if >50%
-DENSITY_WINDOW = 100000     # 100kb windows for density calculation
-MAX_DISTANCE_PLOT = 10000   # Maximum distance to plot (bp)
+METHYLATION_THRESHOLD_5MC = 50   # 5mC threshold (%)
+METHYLATION_THRESHOLD_5HMC = 1   # 5hmC threshold (%) - much lower!
+USE_ADAPTIVE_THRESHOLD = True    # Use median as threshold instead
+DENSITY_WINDOW = 100000          # 100kb windows for density calculation
+MAX_DISTANCE_PLOT = 10000        # Maximum distance to plot (bp)
 
 chromosomes = [f'chr{i}' for i in range(1, 23)] + ['chrX']
 
 # -------------------
 # Analysis Functions
 # -------------------
-def calculate_inter_site_distances(sites_df, mod_type='5mC'):
+def calculate_inter_site_distances(sites_df, mod_type='5mC', threshold=None):
     """
     Calculate distances between consecutive methylated CpG sites
+    Uses adaptive threshold based on data distribution if not specified
     """
     if mod_type == '5mC':
         value_col = 'percent_m'
         valid_col = 'count_valid_m'
+        default_threshold = METHYLATION_THRESHOLD_5MC
     else:
         value_col = 'percent_h'
         valid_col = 'count_valid_h'
+        default_threshold = METHYLATION_THRESHOLD_5HMC
     
-    # Filter for methylated sites (above threshold and good coverage)
-    methylated = sites_df[
-        (sites_df[value_col] >= METHYLATION_THRESHOLD) &
-        (sites_df[valid_col] >= MIN_COVERAGE)
-    ].copy()
+    # Filter for valid coverage
+    valid_sites = sites_df[sites_df[valid_col] >= MIN_COVERAGE].copy()
+    
+    if len(valid_sites) < 2:
+        return pd.DataFrame(), valid_sites, 0
+    
+    # Determine threshold
+    if USE_ADAPTIVE_THRESHOLD or threshold is None:
+        # Use median as threshold for adaptive approach
+        threshold = valid_sites[value_col].median()
+        print(f"    Using adaptive threshold: {threshold:.2f}%")
+    else:
+        threshold = default_threshold
+    
+    # Filter for methylated sites (above threshold)
+    methylated = valid_sites[valid_sites[value_col] >= threshold].copy()
     
     if len(methylated) < 2:
-        return pd.DataFrame(), methylated
+        return pd.DataFrame(), methylated, threshold
     
     # Sort by position
     methylated = methylated.sort_values('start').reset_index(drop=True)
@@ -70,28 +86,38 @@ def calculate_inter_site_distances(sites_df, mod_type='5mC'):
             'methylation2': methylated.iloc[i+1][value_col]
         })
     
-    return pd.DataFrame(distances), methylated
+    return pd.DataFrame(distances), methylated, threshold
 
-def calculate_methylation_density(sites_df, mod_type='5mC', window_size=DENSITY_WINDOW):
+def calculate_methylation_density(sites_df, mod_type='5mC', threshold=None, window_size=DENSITY_WINDOW):
     """
     Calculate methylation density (number of methylated sites per window)
+    Uses adaptive threshold if not specified
     """
     if mod_type == '5mC':
         value_col = 'percent_m'
         valid_col = 'count_valid_m'
+        default_threshold = METHYLATION_THRESHOLD_5MC
     else:
         value_col = 'percent_h'
         valid_col = 'count_valid_h'
+        default_threshold = METHYLATION_THRESHOLD_5HMC
     
     # All valid sites
     valid_sites = sites_df[sites_df[valid_col] >= MIN_COVERAGE].copy()
+    
+    if len(valid_sites) == 0:
+        return pd.DataFrame()
+    
     valid_sites['center'] = (valid_sites['start'] + valid_sites['end']) / 2
     
+    # Determine threshold
+    if USE_ADAPTIVE_THRESHOLD or threshold is None:
+        threshold = valid_sites[value_col].median()
+    else:
+        threshold = default_threshold
+    
     # Methylated sites
-    methylated = sites_df[
-        (sites_df[value_col] >= METHYLATION_THRESHOLD) &
-        (sites_df[valid_col] >= MIN_COVERAGE)
-    ].copy()
+    methylated = valid_sites[valid_sites[value_col] >= threshold].copy()
     methylated['center'] = (methylated['start'] + methylated['end']) / 2
     
     # Create windows across chromosome
