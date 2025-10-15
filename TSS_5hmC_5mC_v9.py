@@ -18,7 +18,7 @@ os.makedirs(out_dir, exist_ok=True)
 
 # Parameters
 window_size = 2000  # ±2kb around TSS
-bin_size = 150     # 100bp bins
+bin_size = 150     # 150bp bins
 
 # -------------------
 # Extract TSS coordinates
