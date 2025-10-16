@@ -3,7 +3,7 @@
 Enhanced Genome-wide Methylation Visualization Tool
 Comprehensive analysis and visualization of 5mC and 5hmC across entire genome
 Author: Genomics Analysis Pipeline
-Version: 2.0
+Version: 2.1 - Modified for complete chromosome analysis
 """
 
 import os
@@ -29,7 +29,7 @@ class Config:
     out_dir = os.path.join(base_dir, "genome_wide_methylation")
     
     # Resolution settings
-    bin_size = 1000000  # 1Mb bins (adjust: 500000 for higher res, 5000000 for lower)
+    bin_size = 1500000  # *** CHANGED: 1.5 Mb bins ***
     smoothing_sigma = 2  # Gaussian smoothing (0 = no smoothing, 3 = strong)
     
     # Chromosome settings
@@ -43,8 +43,8 @@ class Config:
     # Statistical settings
     min_coverage = 5  # Minimum valid reads per bin
     
-    # Control sample (set to None for first sample, or specify name)
-    control_sample = None
+    # Control sample - *** CHANGED: Set to 07 sample ***
+    control_sample = "07"  # Will match any sample containing "07"
 
 config = Config()
 os.makedirs(config.out_dir, exist_ok=True)
@@ -159,11 +159,17 @@ for sample_file in tqdm(sample_files, desc="Loading samples"):
     all_samples[sample_name] = binned_data
     print(f"  {sample_name}: {len(raw_data):,} sites → {len(binned_data):,} bins")
 
-# Set control sample
-if config.control_sample is None:
+# *** CHANGED: Set control sample to match "07" ***
+control_name = None
+for sample_name in all_samples.keys():
+    if "07" in sample_name:
+        control_name = sample_name
+        break
+
+if control_name is None:
     control_name = list(all_samples.keys())[0]
-else:
-    control_name = config.control_sample
+    print(f"\nWARNING: No sample containing '07' found. Using first sample as control.")
+
 print(f"\nControl sample: {control_name}")
 
 # -------------------
@@ -312,10 +318,65 @@ plt.savefig(os.path.join(config.out_dir, 'genome_wide_overview.png'),
 plt.close()
 
 # -------------------
-# Plot 2: Per-chromosome detailed view
+# *** NEW: Plot 2: Combined methylation profile comparison ***
 # -------------------
-print("2. Per-chromosome plots...")
-for chrom in tqdm(config.chromosomes[:5], desc="Chromosomes"):  # First 5 for demo
+print("2. Combined methylation profile comparison...")
+fig, axes = plt.subplots(len(config.chromosomes), 2, 
+                         figsize=(20, 4*len(config.chromosomes)), 
+                         sharex='col')
+
+for chrom_idx, chrom in enumerate(tqdm(config.chromosomes, desc="Combined profiles")):
+    if chrom not in CHROM_SIZES:
+        continue
+    
+    ax_5mc = axes[chrom_idx, 0] if len(config.chromosomes) > 1 else axes[0]
+    ax_5hmc = axes[chrom_idx, 1] if len(config.chromosomes) > 1 else axes[1]
+    
+    for idx, (sample, data) in enumerate(all_samples.items()):
+        chrom_data = data[data['chrom'] == chrom]
+        if len(chrom_data) == 0:
+            continue
+        
+        pos = chrom_data['genome_pos'] - cumulative_positions[chrom]
+        
+        # 5mC
+        ax_5mc.plot(pos / 1e6, chrom_data['percent_m_smooth'], 
+                    linewidth=1.5, alpha=0.7, label=sample, color=colors[idx])
+        
+        # 5hmC
+        ax_5hmc.plot(pos / 1e6, chrom_data['percent_h_smooth'], 
+                     linewidth=1.5, alpha=0.7, label=sample, color=colors[idx])
+    
+    # 5mC formatting
+    ax_5mc.set_ylabel(f'{chrom}\n5mC (%)', fontsize=10, fontweight='bold')
+    ax_5mc.grid(True, alpha=0.3)
+    ax_5mc.set_ylim([0, 100])
+    if chrom_idx == 0:
+        ax_5mc.set_title('5mC Methylation', fontsize=12, fontweight='bold')
+        ax_5mc.legend(fontsize=8, loc='upper right', ncol=2)
+    
+    # 5hmC formatting
+    ax_5hmc.set_ylabel(f'{chrom}\n5hmC (%)', fontsize=10, fontweight='bold')
+    ax_5hmc.grid(True, alpha=0.3)
+    if chrom_idx == 0:
+        ax_5hmc.set_title('5hmC Methylation', fontsize=12, fontweight='bold')
+        ax_5hmc.legend(fontsize=8, loc='upper right', ncol=2)
+    
+    # X-axis only on bottom
+    if chrom_idx == len(config.chromosomes) - 1:
+        ax_5mc.set_xlabel('Position (Mb)', fontsize=11, fontweight='bold')
+        ax_5hmc.set_xlabel('Position (Mb)', fontsize=11, fontweight='bold')
+
+plt.tight_layout()
+plt.savefig(os.path.join(config.out_dir, 'combined_methylation_profiles.png'), 
+            dpi=config.dpi, bbox_inches='tight')
+plt.close()
+
+# -------------------
+# Plot 3: Per-chromosome detailed view (*** CHANGED: ALL chromosomes ***)
+# -------------------
+print("3. Per-chromosome detailed plots...")
+for chrom in tqdm(config.chromosomes, desc="Individual chromosomes"):  # *** ALL chromosomes ***
     if chrom not in CHROM_SIZES:
         continue
     
@@ -336,6 +397,7 @@ for chrom in tqdm(config.chromosomes[:5], desc="Chromosomes"):  # First 5 for de
     ax1.set_title(f'{chrom} Methylation Profile', fontsize=13, fontweight='bold')
     ax1.legend(fontsize=9)
     ax1.grid(True, alpha=0.3)
+    ax1.set_ylim([0, 100])
     
     ax2.set_ylabel('5hmC (%)', fontsize=11, fontweight='bold')
     ax2.set_xlabel('Position (Mb)', fontsize=11, fontweight='bold')
@@ -348,10 +410,10 @@ for chrom in tqdm(config.chromosomes[:5], desc="Chromosomes"):  # First 5 for de
     plt.close()
 
 # -------------------
-# Plot 3: Log2 fold change vs control
+# Plot 4: Log2 fold change vs control (*** CHANGED: control = 07 sample ***)
 # -------------------
 if len(all_samples) > 1:
-    print("3. Log2 fold change plots...")
+    print("4. Log2 fold change plots...")
     
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=config.figsize_tall, sharex=True)
     
@@ -412,10 +474,10 @@ if len(all_samples) > 1:
     plt.close()
 
 # -------------------
-# Plot 4: Correlation heatmaps
+# Plot 5: Correlation heatmaps
 # -------------------
 if len(all_samples) > 1:
-    print("4. Correlation heatmaps...")
+    print("5. Correlation heatmaps...")
     
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
     
@@ -437,7 +499,7 @@ if len(all_samples) > 1:
 # -------------------
 # Export data
 # -------------------
-print("5. Exporting data...")
+print("6. Exporting data...")
 for sample, data in all_samples.items():
     export_data = data[['chrom', 'genome_pos', 'percent_m', 'percent_h', 
                         'percent_m_smooth', 'percent_h_smooth']].copy()
@@ -453,12 +515,15 @@ print('='*60)
 print(f"\nResults saved to: {config.out_dir}/")
 print("\nGenerated files:")
 print("  1. genome_wide_overview.png - Main visualization")
-print("  2. genome_wide_log2fc.png - Fold change analysis")
-print("  3. sample_correlations.png - Sample similarity")
-print("  4. [chr]_methylation.png - Per-chromosome details")
-print("  5. genome_wide_statistics.csv - Summary statistics")
-print("  6. [sample]_genome_wide_data.csv - Processed data")
+print("  2. combined_methylation_profiles.png - *** NEW: All chromosomes side-by-side ***")
+print("  3. genome_wide_log2fc.png - Fold change analysis (vs sample 07)")
+print("  4. sample_correlations.png - Sample similarity")
+print("  5. [chr]_methylation.png - Per-chromosome details (ALL 24 chromosomes)")
+print("  6. genome_wide_statistics.csv - Summary statistics")
+print("  7. [sample]_genome_wide_data.csv - Processed data")
 print(f"\nSettings:")
-print(f"  Bin size: {config.bin_size/1e6:.1f} Mb")
+print(f"  Bin size: {config.bin_size/1e6:.1f} Mb *** CHANGED to 1.5 Mb ***")
 print(f"  Smoothing: σ={config.smoothing_sigma}")
 print(f"  Samples: {len(all_samples)}")
+print(f"  Control: {control_name} *** CHANGED to 07 sample ***")
+print(f"  Chromosomes processed: {len(config.chromosomes)} (ALL)")
