@@ -59,8 +59,11 @@ print("Extracting genomic features from GTF...")
 genes = []
 exons = []
 cds_regions = []
-utrs_5 = []
-utrs_3 = []
+utrs = []  # Collect all UTRs first, will classify later
+
+# First pass: collect features and parse transcript_id for UTR classification
+transcript_cds = {}  # {transcript_id: {'start': min_cds, 'end': max_cds, 'chrom': ..., 'strand': ...}}
+transcript_utrs = {}  # {transcript_id: [utr_regions]}
 
 with open(gtf_file, 'r') as f:
     for line in f:
@@ -75,6 +78,15 @@ with open(gtf_file, 'r') as f:
         start = int(fields[3])
         end = int(fields[4])
         strand = fields[6]
+        attributes = fields[8]
+        
+        # Parse transcript_id
+        transcript_id = None
+        for attr in attributes.split(';'):
+            attr = attr.strip()
+            if attr.startswith('transcript_id'):
+                transcript_id = attr.split('"')[1]
+                break
         
         if feature == 'gene':
             if strand == '+':
@@ -97,22 +109,123 @@ with open(gtf_file, 'r') as f:
         
         elif feature == 'CDS':
             cds_regions.append({'chrom': chrom, 'start': start, 'end': end, 'strand': strand})
+            
+            # Track CDS boundaries per transcript
+            if transcript_id:
+                if transcript_id not in transcript_cds:
+                    transcript_cds[transcript_id] = {
+                        'start': start, 'end': end, 'chrom': chrom, 'strand': strand
+                    }
+                else:
+                    transcript_cds[transcript_id]['start'] = min(transcript_cds[transcript_id]['start'], start)
+                    transcript_cds[transcript_id]['end'] = max(transcript_cds[transcript_id]['end'], end)
         
-        elif feature == 'five_prime_utr':
-            utrs_5.append({'chrom': chrom, 'start': start, 'end': end, 'strand': strand})
+        elif feature == 'UTR':
+            if transcript_id:
+                if transcript_id not in transcript_utrs:
+                    transcript_utrs[transcript_id] = []
+                transcript_utrs[transcript_id].append({
+                    'chrom': chrom, 'start': start, 'end': end, 'strand': strand
+                })
+
+# Second pass: classify UTRs as 5' or 3' based on position relative to CDS
+utrs_5 = []
+utrs_3 = []
+
+for transcript_id, utr_list in transcript_utrs.items():
+    if transcript_id not in transcript_cds:
+        continue  # No CDS for this transcript
+    
+    cds_info = transcript_cds[transcript_id]
+    cds_start = cds_info['start']
+    cds_end = cds_info['end']
+    strand = cds_info['strand']
+    
+    for utr in utr_list:
+        utr_center = (utr['start'] + utr['end']) / 2
         
-        elif feature == 'three_prime_utr':
-            utrs_3.append({'chrom': chrom, 'start': start, 'end': end, 'strand': strand})
+        if strand == '+':
+            # Plus strand: 5'UTR before CDS, 3'UTR after CDS
+            if utr_center < cds_start:
+                utrs_5.append(utr)
+            elif utr_center > cds_end:
+                utrs_3.append(utr)
+        else:
+            # Minus strand: 5'UTR after CDS, 3'UTR before CDS
+            if utr_center > cds_end:
+                utrs_5.append(utr)
+            elif utr_center < cds_start:
+                utrs_3.append(utr)
 
 genes_df = pd.DataFrame(genes)
 genes_df = genes_df[genes_df['length'] > 500]
-print(f"Loaded {len(genes_df)} genes, {len(exons)} exons, {len(utrs_5)} 5'UTRs, {len(utrs_3)} 3'UTRs")
 
 # Convert to DataFrames for easier querying
 exons_df = pd.DataFrame(exons)
 utrs_5_df = pd.DataFrame(utrs_5)
 utrs_3_df = pd.DataFrame(utrs_3)
 cds_df = pd.DataFrame(cds_regions)
+
+# If no UTRs found, compute them from exons - CDS
+if len(utrs_5) == 0 and len(utrs_3) == 0 and len(cds_regions) > 0:
+    print("Computing UTRs from CDS and exon coordinates...")
+    
+    for _, gene in genes_df.iterrows():
+        chrom, g_start, g_end, strand = gene['chrom'], gene['start'], gene['end'], gene['strand']
+        
+        # Get gene's CDS regions
+        gene_cds = cds_df[(cds_df['chrom'] == chrom) & 
+                          (cds_df['start'] < g_end) & 
+                          (cds_df['end'] > g_start)]
+        
+        if len(gene_cds) == 0:
+            continue
+        
+        cds_start = gene_cds['start'].min()
+        cds_end = gene_cds['end'].max()
+        
+        # Get gene's exons
+        gene_exons = exons_df[(exons_df['chrom'] == chrom) & 
+                              (exons_df['start'] < g_end) & 
+                              (exons_df['end'] > g_start)]
+        
+        if len(gene_exons) == 0:
+            continue
+        
+        # Compute UTRs based on strand
+        if strand == '+':
+            # 5'UTR: exons before CDS
+            for _, exon in gene_exons.iterrows():
+                if exon['end'] <= cds_start:
+                    utrs_5.append({'chrom': chrom, 'start': exon['start'], 'end': exon['end'], 'strand': strand})
+                elif exon['start'] < cds_start < exon['end']:
+                    utrs_5.append({'chrom': chrom, 'start': exon['start'], 'end': cds_start, 'strand': strand})
+            
+            # 3'UTR: exons after CDS
+            for _, exon in gene_exons.iterrows():
+                if exon['start'] >= cds_end:
+                    utrs_3.append({'chrom': chrom, 'start': exon['start'], 'end': exon['end'], 'strand': strand})
+                elif exon['start'] < cds_end < exon['end']:
+                    utrs_3.append({'chrom': chrom, 'start': cds_end, 'end': exon['end'], 'strand': strand})
+        else:
+            # Minus strand: reversed
+            for _, exon in gene_exons.iterrows():
+                if exon['start'] >= cds_end:
+                    utrs_5.append({'chrom': chrom, 'start': exon['start'], 'end': exon['end'], 'strand': strand})
+                elif exon['start'] < cds_end < exon['end']:
+                    utrs_5.append({'chrom': chrom, 'start': cds_end, 'end': exon['end'], 'strand': strand})
+            
+            for _, exon in gene_exons.iterrows():
+                if exon['end'] <= cds_start:
+                    utrs_3.append({'chrom': chrom, 'start': exon['start'], 'end': exon['end'], 'strand': strand})
+                elif exon['start'] < cds_start < exon['end']:
+                    utrs_3.append({'chrom': chrom, 'start': exon['start'], 'end': cds_start, 'strand': strand})
+    
+    utrs_5_df = pd.DataFrame(utrs_5)
+    utrs_3_df = pd.DataFrame(utrs_3)
+    print(f"  Computed {len(utrs_5)} 5'UTRs and {len(utrs_3)} 3'UTRs")
+
+print(f"Loaded {len(genes_df)} genes, {len(exons)} exons, {len(utrs_5)} 5'UTRs, {len(utrs_3)} 3'UTRs")
 
 # -------------------
 # Build feature index by chromosome
