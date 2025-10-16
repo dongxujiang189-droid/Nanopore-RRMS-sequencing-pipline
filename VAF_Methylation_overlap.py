@@ -22,7 +22,7 @@ n_gene_bins = 80
 n_flank_bins = 80
 use_smoothing = True
 smooth_window = 5
-min_vaf = 0.1  # Filter variants with VAF >= 10%
+min_vaf = 0.02  # Filter variants with VAF >= 2%
 
 # -------------------
 # Helper functions
