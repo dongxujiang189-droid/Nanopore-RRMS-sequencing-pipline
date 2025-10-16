@@ -22,9 +22,8 @@ gtf_file = "/mnt/e/annotations/Homo_sapiens.GRCh38.gtf"
 out_dir = os.path.join(base_dir, "multiscale_analysis")
 os.makedirs(out_dir, exist_ok=True)
 
-chromosomes = [f'chr{i}' for i in range(1, 23)] + ['chrX']
+chromosomes = [f'chr{i}' for i in range(1, 23)] + ['chrX', 'chrY']
 chrom_bin_size = 1_000_000
-gene_flank = 2000
 min_vaf = 0.0001
 
 chrom_sizes = {
@@ -33,7 +32,7 @@ chrom_sizes = {
     'chr9': 138394717, 'chr10': 133797422, 'chr11': 135086622, 'chr12': 133275309,
     'chr13': 114364328, 'chr14': 107043718, 'chr15': 101991189, 'chr16': 90338345,
     'chr17': 83257441, 'chr18': 80373285, 'chr19': 58617616, 'chr20': 64444167,
-    'chr21': 46709983, 'chr22': 50818468, 'chrX': 156040895
+    'chr21': 46709983, 'chr22': 50818468, 'chrX': 156040895, 'chrY': 57227415
 }
 
 # -------------------
@@ -53,7 +52,6 @@ with open(gtf_file, 'r') as f:
         start, end = int(fields[3]), int(fields[4])
         strand = fields[6]
         
-        # Extract gene name
         gene_name = None
         for attr in fields[8].split(';'):
             if 'gene_name' in attr:
@@ -71,19 +69,18 @@ genes_df = genes_df[genes_df['length'] > 500]
 print(f"  {len(genes_df)} genes")
 
 # -------------------
-# Load CXXC4
+# Load CXXC4 - 5 column BED
 # -------------------
 print("Loading CXXC4...")
-cxxc4_df = pd.read_csv(cxxc4_file, sep='\t', header=None, 
-                       names=['chrom', 'start', 'end', 'name', 'score', 'strand', 'signalValue', 'pValue', 'qValue'],
-                       usecols=[0,1,2,6])
-if not cxxc4_df['chrom'].iloc[0].startswith('chr'):
-    cxxc4_df['chrom'] = 'chr' + cxxc4_df['chrom'].astype(str)
+cxxc4_df = pd.read_csv(cxxc4_file, sep='\t', header=None,
+                       names=['chrom', 'start', 'end', 'name', 'score'])
 print(f"  {len(cxxc4_df)} peaks")
 
 # Chromosome-level CXXC4
 cxxc4_chrom = {}
 for chrom in chromosomes:
+    if chrom not in chrom_sizes:
+        continue
     bins = np.arange(0, chrom_sizes[chrom], chrom_bin_size)
     signals = np.zeros(len(bins))
     peaks = cxxc4_df[cxxc4_df['chrom'] == chrom]
@@ -92,7 +89,7 @@ for chrom in chromosomes:
         end = start + chrom_bin_size
         overlaps = peaks[(peaks['end'] > start) & (peaks['start'] < end)]
         if len(overlaps) > 0:
-            signals[idx] = overlaps['signalValue'].sum()
+            signals[idx] = overlaps['score'].sum()
     
     cxxc4_chrom[chrom] = signals
 
@@ -109,9 +106,10 @@ for vcf_file in vcf_files:
     print(f"\nProcessing {sample}...")
     vcf = pysam.VariantFile(vcf_file)
     
-    # Chromosome-level VAF
     vaf_chrom = {}
     for chrom in chromosomes:
+        if chrom not in chrom_sizes:
+            continue
         bins = np.arange(0, chrom_sizes[chrom], chrom_bin_size)
         position_vaf = defaultdict(float)
         
@@ -139,9 +137,8 @@ for vcf_file in vcf_files:
         
         vaf_chrom[chrom] = [np.nanmean(b) if b else np.nan for b in bin_vaf]
     
-    # Gene-level VAF
     vaf_genes = []
-    for _, gene in tqdm(genes_df.iterrows(), total=len(genes_df), desc="  Genes"):
+    for _, gene in tqdm(genes_df.iterrows(), total=len(genes_df), desc="  VAF genes"):
         try:
             vafs = []
             for rec in vcf.fetch(gene['chrom'], gene['start'], gene['end']):
@@ -171,7 +168,6 @@ for vcf_file in vcf_files:
     vcf.close()
     
     all_data[sample] = {'vaf_chrom': vaf_chrom, 'vaf_genes': pd.DataFrame(vaf_genes)}
-    
     pd.DataFrame(vaf_chrom).to_csv(os.path.join(out_dir, f'{sample}_vaf_chrom.csv'), index=False)
     all_data[sample]['vaf_genes'].to_csv(os.path.join(out_dir, f'{sample}_vaf_genes.csv'), index=False)
 
@@ -192,9 +188,10 @@ for meth_file in meth_files:
     if not str(meth_df['chrom'].iloc[0]).startswith('chr'):
         meth_df['chrom'] = 'chr' + meth_df['chrom'].astype(str)
     
-    # Chromosome-level
     mc_chrom, hmc_chrom = {}, {}
     for chrom in chromosomes:
+        if chrom not in chrom_sizes:
+            continue
         bins = np.arange(0, chrom_sizes[chrom], chrom_bin_size)
         mc_bins = [[] for _ in range(len(bins))]
         hmc_bins = [[] for _ in range(len(bins))]
@@ -210,9 +207,8 @@ for meth_file in meth_files:
         mc_chrom[chrom] = [np.nanmean(b) if b else np.nan for b in mc_bins]
         hmc_chrom[chrom] = [np.nanmean(b) if b else np.nan for b in hmc_bins]
     
-    # Gene-level
     meth_genes = []
-    for _, gene in tqdm(genes_df.iterrows(), total=len(genes_df), desc="  Genes"):
+    for _, gene in tqdm(genes_df.iterrows(), total=len(genes_df), desc="  Meth genes"):
         gene_meth = meth_df[
             (meth_df['chrom'] == gene['chrom']) &
             (meth_df['end'] > gene['start']) &
@@ -247,22 +243,24 @@ for _, gene in tqdm(genes_df.iterrows(), total=len(genes_df)):
     cxxc4_genes.append({
         'gene': gene['name'],
         'chrom': gene['chrom'],
-        'cxxc4_signal': peaks['signalValue'].sum() if len(peaks) > 0 else 0
+        'cxxc4_signal': peaks['score'].sum() if len(peaks) > 0 else 0
     })
 
 cxxc4_genes_df = pd.DataFrame(cxxc4_genes)
 cxxc4_genes_df.to_csv(os.path.join(out_dir, 'cxxc4_genes.csv'), index=False)
 
 # -------------------
-# Integrated plots: chromosome-level
+# Chromosome-level plots
 # -------------------
-print("\nPlotting chromosome-level...")
+print("\nPlotting...")
 samples = [s for s in all_data.keys() if 'vaf_chrom' in all_data[s] and 'mc_chrom' in all_data[s]]
 
 for sample in samples:
     for chrom in tqdm(chromosomes, desc=sample):
-        bins = np.arange(0, chrom_sizes[chrom], chrom_bin_size) / 1e6
+        if chrom not in chrom_sizes:
+            continue
         
+        bins = np.arange(0, chrom_sizes[chrom], chrom_bin_size) / 1e6
         vaf = np.array(all_data[sample]['vaf_chrom'].get(chrom, []))
         mc = np.array(all_data[sample]['mc_chrom'].get(chrom, []))
         hmc = np.array(all_data[sample]['hmc_chrom'].get(chrom, []))
@@ -276,7 +274,7 @@ for sample in samples:
         axes[0].fill_between(bins[:len(vaf)], gaussian_filter1d(np.nan_to_num(vaf), 1.5), alpha=0.5, color='#e74c3c')
         axes[0].plot(bins[:len(vaf)], gaussian_filter1d(np.nan_to_num(vaf), 1.5), linewidth=2, color='#c0392b')
         axes[0].set_ylabel('VAF', fontweight='bold')
-        axes[0].set_title(f'{sample} - {chrom} (Chromosome-level)', fontsize=14, fontweight='bold')
+        axes[0].set_title(f'{sample} - {chrom}', fontsize=14, fontweight='bold')
         axes[0].grid(alpha=0.2)
         
         axes[1].fill_between(bins[:len(mc)], gaussian_filter1d(np.nan_to_num(mc), 1.5), alpha=0.5, color='#3498db')
@@ -296,107 +294,56 @@ for sample in samples:
         axes[3].grid(alpha=0.2)
         
         plt.tight_layout()
-        plt.savefig(os.path.join(out_dir, f'{sample}_{chrom}_chromosome.png'), dpi=300, bbox_inches='tight')
+        plt.savefig(os.path.join(out_dir, f'{sample}_{chrom}_chrom.png'), dpi=300, bbox_inches='tight')
         plt.close()
 
 # -------------------
-# Gene-level comparisons
+# Gene-level analysis
 # -------------------
-print("\nGene-level analysis...")
-
 for sample in samples:
-    # Merge gene data
     gene_data = all_data[sample]['vaf_genes'].merge(
         all_data[sample]['meth_genes'], on=['gene', 'chrom']
     ).merge(cxxc4_genes_df, on=['gene', 'chrom'])
     
-    gene_data = gene_data.dropna(subset=['mean_vaf', 'mean_5mc', 'mean_5hmc'])
     gene_data.to_csv(os.path.join(out_dir, f'{sample}_gene_integrated.csv'), index=False)
     
-    # Gene-level scatter plots
     fig, axes = plt.subplots(2, 3, figsize=(18, 12))
     
-    axes[0,0].hexbin(gene_data['mean_vaf'], gene_data['mean_5mc'], gridsize=40, cmap='Blues', mincnt=1)
+    df = gene_data.dropna(subset=['mean_vaf', 'mean_5mc', 'mean_5hmc'])
+    
+    axes[0,0].hexbin(df['mean_vaf'], df['mean_5mc'], gridsize=40, cmap='Blues', mincnt=1)
     axes[0,0].set_xlabel('VAF', fontweight='bold')
     axes[0,0].set_ylabel('5mC', fontweight='bold')
-    axes[0,0].set_title('VAF vs 5mC (Gene-level)')
+    axes[0,0].set_title('VAF vs 5mC')
     
-    axes[0,1].hexbin(gene_data['mean_vaf'], gene_data['mean_5hmc'], gridsize=40, cmap='Greens', mincnt=1)
+    axes[0,1].hexbin(df['mean_vaf'], df['mean_5hmc'], gridsize=40, cmap='Greens', mincnt=1)
     axes[0,1].set_xlabel('VAF', fontweight='bold')
     axes[0,1].set_ylabel('5hmC', fontweight='bold')
     axes[0,1].set_title('VAF vs 5hmC')
     
-    axes[0,2].hexbin(gene_data['mean_vaf'], gene_data['cxxc4_signal'], gridsize=40, cmap='Purples', mincnt=1)
+    axes[0,2].hexbin(df['mean_vaf'], df['cxxc4_signal'], gridsize=40, cmap='Purples', mincnt=1)
     axes[0,2].set_xlabel('VAF', fontweight='bold')
     axes[0,2].set_ylabel('CXXC4', fontweight='bold')
     axes[0,2].set_title('VAF vs CXXC4')
     
-    axes[1,0].hexbin(gene_data['mean_5mc'], gene_data['mean_5hmc'], gridsize=40, cmap='viridis', mincnt=1)
+    axes[1,0].hexbin(df['mean_5mc'], df['mean_5hmc'], gridsize=40, cmap='viridis', mincnt=1)
     axes[1,0].set_xlabel('5mC', fontweight='bold')
     axes[1,0].set_ylabel('5hmC', fontweight='bold')
     axes[1,0].set_title('5mC vs 5hmC')
     
-    axes[1,1].hexbin(gene_data['mean_5mc'], gene_data['cxxc4_signal'], gridsize=40, cmap='plasma', mincnt=1)
+    axes[1,1].hexbin(df['mean_5mc'], df['cxxc4_signal'], gridsize=40, cmap='plasma', mincnt=1)
     axes[1,1].set_xlabel('5mC', fontweight='bold')
     axes[1,1].set_ylabel('CXXC4', fontweight='bold')
     axes[1,1].set_title('5mC vs CXXC4')
     
-    axes[1,2].hexbin(gene_data['mean_5hmc'], gene_data['cxxc4_signal'], gridsize=40, cmap='magma', mincnt=1)
+    axes[1,2].hexbin(df['mean_5hmc'], df['cxxc4_signal'], gridsize=40, cmap='magma', mincnt=1)
     axes[1,2].set_xlabel('5hmC', fontweight='bold')
     axes[1,2].set_ylabel('CXXC4', fontweight='bold')
     axes[1,2].set_title('5hmC vs CXXC4')
     
-    plt.suptitle(f'{sample}: Gene-level correlations', fontsize=16, fontweight='bold')
+    plt.suptitle(f'{sample}: Gene-level', fontsize=16, fontweight='bold')
     plt.tight_layout()
     plt.savefig(os.path.join(out_dir, f'{sample}_gene_scatter.png'), dpi=300, bbox_inches='tight')
-    plt.close()
-
-# -------------------
-# Multi-scale comparison
-# -------------------
-print("\nMulti-scale comparisons...")
-
-for sample in samples:
-    fig, axes = plt.subplots(4, 2, figsize=(20, 16))
-    
-    # Chromosome-level distributions
-    all_vaf_c = np.concatenate([all_data[sample]['vaf_chrom'][c] for c in chromosomes if c in all_data[sample]['vaf_chrom']])
-    all_mc_c = np.concatenate([all_data[sample]['mc_chrom'][c] for c in chromosomes])
-    all_hmc_c = np.concatenate([all_data[sample]['hmc_chrom'][c] for c in chromosomes])
-    all_cxxc4_c = np.concatenate([cxxc4_chrom[c] for c in chromosomes])
-    
-    axes[0,0].hist(all_vaf_c[~np.isnan(all_vaf_c)], bins=50, color='#e74c3c', alpha=0.7)
-    axes[0,0].set_title('VAF - Chromosome', fontweight='bold')
-    
-    axes[1,0].hist(all_mc_c[~np.isnan(all_mc_c)], bins=50, color='#3498db', alpha=0.7)
-    axes[1,0].set_title('5mC - Chromosome', fontweight='bold')
-    
-    axes[2,0].hist(all_hmc_c[~np.isnan(all_hmc_c)], bins=50, color='#2ecc71', alpha=0.7)
-    axes[2,0].set_title('5hmC - Chromosome', fontweight='bold')
-    
-    axes[3,0].hist(all_cxxc4_c[all_cxxc4_c > 0], bins=50, color='#9b59b6', alpha=0.7)
-    axes[3,0].set_title('CXXC4 - Chromosome', fontweight='bold')
-    
-    # Gene-level distributions
-    gene_data = all_data[sample]['vaf_genes'].merge(
-        all_data[sample]['meth_genes'], on=['gene', 'chrom']
-    ).merge(cxxc4_genes_df, on=['gene', 'chrom'])
-    
-    axes[0,1].hist(gene_data['mean_vaf'].dropna(), bins=50, color='#e74c3c', alpha=0.7)
-    axes[0,1].set_title('VAF - Gene', fontweight='bold')
-    
-    axes[1,1].hist(gene_data['mean_5mc'].dropna(), bins=50, color='#3498db', alpha=0.7)
-    axes[1,1].set_title('5mC - Gene', fontweight='bold')
-    
-    axes[2,1].hist(gene_data['mean_5hmc'].dropna(), bins=50, color='#2ecc71', alpha=0.7)
-    axes[2,1].set_title('5hmC - Gene', fontweight='bold')
-    
-    axes[3,1].hist(gene_data['cxxc4_signal'][gene_data['cxxc4_signal'] > 0], bins=50, color='#9b59b6', alpha=0.7)
-    axes[3,1].set_title('CXXC4 - Gene', fontweight='bold')
-    
-    plt.suptitle(f'{sample}: Chromosome vs Gene-level distributions', fontsize=16, fontweight='bold')
-    plt.tight_layout()
-    plt.savefig(os.path.join(out_dir, f'{sample}_multiscale.png'), dpi=300, bbox_inches='tight')
     plt.close()
 
 print(f"\n✓ Complete: {out_dir}/")
