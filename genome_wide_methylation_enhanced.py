@@ -29,7 +29,7 @@ class Config:
     out_dir = os.path.join(base_dir, "genome_wide_methylation")
     
     # Resolution settings
-    bin_size = 1500000  # *** CHANGED: 1.5 Mb bins ***
+    bin_size = 500000  # *** CHANGED: 0.5 Mb bins ***
     smoothing_sigma = 2  # Gaussian smoothing (0 = no smoothing, 3 = strong)
     
     # Chromosome settings
