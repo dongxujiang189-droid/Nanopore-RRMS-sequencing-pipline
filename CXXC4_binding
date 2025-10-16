@@ -1,0 +1,16 @@
+# Create directory
+mkdir -p /mnt/e/Data/seq_for_human_293t2/cxxc4_binding
+cd /mnt/e/Data/seq_for_human_293t2/cxxc4_binding
+
+# Download from GEO (check specific samples on the page)
+# For GSE42958, look for CXXC4 ChIP-seq samples
+wget https://www.ncbi.nlm.nih.gov/geo/download/?acc=GSE42958&format=file
+
+# Or download specific supplementary files (BED/BigWig if available)
+# Example if they have processed peaks:
+wget "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE42nnn/GSE42958/suppl/GSE42958_peaks.bed.gz"
+
+# If only raw data (SRA) available:
+# Get SRA accession numbers from GEO page, then:
+prefetch SRR#######
+fastq-dump --gzip SRR#######
