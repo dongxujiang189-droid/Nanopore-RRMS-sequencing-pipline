@@ -1,71 +1,25 @@
-(seq_env) jiangd@NE060250W79682D:/mnt/e/Data/seq_for_human_293t2/barcode04$ python3 comethylation_analy.py
-Calculating thresholds...
-Loading: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 4/4 [00:00<00:00, 42.35it/s]
-Thresholds: 5mC=57.65%, 5hmC=1.89%
-
-Processing samples...
-
-barcode04
-  5mC: 8,491 methylated sites (≥57.7%)
-       8,468 total adjacent pairs
-       0 pairs within 500bp (0.0%)
-       0 final data points
-  5hmC: 7,890 methylated sites (≥1.9%)
-        7,867 total adjacent pairs
-        0 pairs within 500bp (0.0%)
-        0 final data points
-
-barcode05
-  5mC: 8,156 methylated sites (≥57.7%)
-       8,133 total adjacent pairs
-       0 pairs within 500bp (0.0%)
-       0 final data points
-  5hmC: 8,561 methylated sites (≥1.9%)
-        8,538 total adjacent pairs
-        0 pairs within 500bp (0.0%)
-        0 final data points
-
-barcode06
-  5mC: 8,464 methylated sites (≥57.7%)
-       8,441 total adjacent pairs
-       0 pairs within 500bp (0.0%)
-       0 final data points
-  5hmC: 8,522 methylated sites (≥1.9%)
-        8,499 total adjacent pairs
-        0 pairs within 500bp (0.0%)
-        0 final data points
-
-barcode07
-  5mC: 8,254 methylated sites (≥57.7%)
-       8,231 total adjacent pairs
-       0 pairs within 500bp (0.0%)
-       0 final data points
-  5hmC: 8,318 methylated sites (≥1.9%)
-        8,295 total adjacent pairs
-        0 pairs within 500bp (0.0%)
-        0 final data points
-
-Generating comparison plots...
+  Data table: integrated_profiles.csv
+(seq_env) jiangd@NE060250W79682D:/mnt/e/Data/seq_for_human_293t2/barcode04$ python3 vaf_methy_cxxc4.py
+Loading genes...
+  48404 genes
+Loading CXXC4...
 Traceback (most recent call last):
-  File "/mnt/e/venvs/seq_env/lib/python3.12/site-packages/pandas/core/indexes/base.py", line 3812, in get_loc
-    return self._engine.get_loc(casted_key)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "pandas/_libs/index.pyx", line 167, in pandas._libs.index.IndexEngine.get_loc
-  File "pandas/_libs/index.pyx", line 196, in pandas._libs.index.IndexEngine.get_loc
-  File "pandas/_libs/hashtable_class_helper.pxi", line 7088, in pandas._libs.hashtable.PyObjectHashTable.get_item
-  File "pandas/_libs/hashtable_class_helper.pxi", line 7096, in pandas._libs.hashtable.PyObjectHashTable.get_item
-KeyError: 'pct_high_density'
-
-The above exception was the direct cause of the following exception:
-
-Traceback (most recent call last):
-  File "/mnt/e/Data/seq_for_human_293t2/barcode04/comethylation_analy.py", line 293, in <module>
-    axes[0,0].bar(samples, metrics_5mc['pct_high_density'], color=colors, edgecolor='black')
-                           ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^
-  File "/mnt/e/venvs/seq_env/lib/python3.12/site-packages/pandas/core/frame.py", line 4113, in __getitem__
-    indexer = self.columns.get_loc(key)
-              ^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/mnt/e/venvs/seq_env/lib/python3.12/site-packages/pandas/core/indexes/base.py", line 3819, in get_loc
-    raise KeyError(key) from err
-KeyError: 'pct_high_density'
-(seq_env) jiangd@NE060250W79682D:/mnt/e/Data/seq_for_human_293t2/barcode04$
+  File "/mnt/e/Data/seq_for_human_293t2/barcode04/vaf_methy_cxxc4.py", line 77, in <module>
+    cxxc4_df = pd.read_csv(cxxc4_file, sep='\t', header=None,
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/e/venvs/seq_env/lib/python3.12/site-packages/pandas/io/parsers/readers.py", line 1026, in read_csv
+    return _read(filepath_or_buffer, kwds)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/e/venvs/seq_env/lib/python3.12/site-packages/pandas/io/parsers/readers.py", line 626, in _read
+    return parser.read(nrows)
+           ^^^^^^^^^^^^^^^^^^
+  File "/mnt/e/venvs/seq_env/lib/python3.12/site-packages/pandas/io/parsers/readers.py", line 1923, in read
+    ) = self._engine.read(  # type: ignore[attr-defined]
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/e/venvs/seq_env/lib/python3.12/site-packages/pandas/io/parsers/c_parser_wrapper.py", line 234, in read
+    chunks = self._reader.read_low_memory(nrows)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "pandas/_libs/parsers.pyx", line 838, in pandas._libs.parsers.TextReader.read_low_memory
+  File "pandas/_libs/parsers.pyx", line 921, in pandas._libs.parsers.TextReader._read_rows
+  File "pandas/_libs/parsers.pyx", line 983, in pandas._libs.parsers.TextReader._convert_column_data
+pandas.errors.ParserError: Too many columns specified: expected 9 and found 5
