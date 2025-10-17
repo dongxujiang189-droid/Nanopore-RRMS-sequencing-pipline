@@ -69,7 +69,7 @@ genes_df = genes_df[genes_df['length'] > 500]
 print(f"  {len(genes_df)} genes")
 
 # -------------------
-# Load CXXC4 - 5 column BED (FIXED)
+# Load CXXC4 - 5 column BED
 # -------------------
 print("Loading CXXC4...")
 cxxc4_df = pd.read_csv(cxxc4_file, sep='\t', header=None,
@@ -77,24 +77,30 @@ cxxc4_df = pd.read_csv(cxxc4_file, sep='\t', header=None,
                        usecols=[0, 1, 2, 3, 4])
 print(f"  {len(cxxc4_df)} peaks")
 
-# Chromosome-level CXXC4
-cxxc4_chrom = {}
-for chrom in chromosomes:
+# Chromosome-level CXXC4 - FIXED: Use long format
+print("Processing CXXC4 by chromosome...")
+cxxc4_chrom_list = []
+for chrom in tqdm(chromosomes, desc="CXXC4 bins"):
     if chrom not in chrom_sizes:
         continue
     bins = np.arange(0, chrom_sizes[chrom], chrom_bin_size)
-    signals = np.zeros(len(bins))
     peaks = cxxc4_df[cxxc4_df['chrom'] == chrom]
     
     for idx, start in enumerate(bins):
         end = start + chrom_bin_size
         overlaps = peaks[(peaks['end'] > start) & (peaks['start'] < end)]
-        if len(overlaps) > 0:
-            signals[idx] = overlaps['score'].sum()
-    
-    cxxc4_chrom[chrom] = signals
+        signal = overlaps['score'].sum() if len(overlaps) > 0 else 0
+        
+        cxxc4_chrom_list.append({
+            'chrom': chrom,
+            'bin_start': start,
+            'bin_end': end,
+            'bin_index': idx,
+            'cxxc4_signal': signal
+        })
 
-pd.DataFrame(cxxc4_chrom).to_csv(os.path.join(out_dir, 'cxxc4_chromosome.csv'), index=False)
+cxxc4_chrom_df = pd.DataFrame(cxxc4_chrom_list)
+cxxc4_chrom_df.to_csv(os.path.join(out_dir, 'cxxc4_chromosome.csv'), index=False)
 
 # -------------------
 # Process VCF
@@ -107,8 +113,8 @@ for vcf_file in vcf_files:
     print(f"\nProcessing {sample}...")
     vcf = pysam.VariantFile(vcf_file)
     
-    vaf_chrom = {}
-    for chrom in chromosomes:
+    vaf_chrom_list = []
+    for chrom in tqdm(chromosomes, desc="VAF chrom"):
         if chrom not in chrom_sizes:
             continue
         bins = np.arange(0, chrom_sizes[chrom], chrom_bin_size)
@@ -136,7 +142,15 @@ for vcf_file in vcf_files:
             if idx < len(bin_vaf):
                 bin_vaf[idx].append(vaf)
         
-        vaf_chrom[chrom] = [np.nanmean(b) if b else np.nan for b in bin_vaf]
+        for idx, (start, vafs) in enumerate(zip(bins, bin_vaf)):
+            vaf_chrom_list.append({
+                'chrom': chrom,
+                'bin_start': start,
+                'bin_end': start + chrom_bin_size,
+                'bin_index': idx,
+                'mean_vaf': np.nanmean(vafs) if vafs else np.nan,
+                'n_variants': len(vafs)
+            })
     
     vaf_genes = []
     for _, gene in tqdm(genes_df.iterrows(), total=len(genes_df), desc="  VAF genes"):
@@ -168,8 +182,12 @@ for vcf_file in vcf_files:
     
     vcf.close()
     
-    all_data[sample] = {'vaf_chrom': vaf_chrom, 'vaf_genes': pd.DataFrame(vaf_genes)}
-    pd.DataFrame(vaf_chrom).to_csv(os.path.join(out_dir, f'{sample}_vaf_chrom.csv'), index=False)
+    all_data[sample] = {
+        'vaf_chrom': pd.DataFrame(vaf_chrom_list),
+        'vaf_genes': pd.DataFrame(vaf_genes)
+    }
+    
+    all_data[sample]['vaf_chrom'].to_csv(os.path.join(out_dir, f'{sample}_vaf_chrom.csv'), index=False)
     all_data[sample]['vaf_genes'].to_csv(os.path.join(out_dir, f'{sample}_vaf_genes.csv'), index=False)
 
 # -------------------
@@ -189,8 +207,8 @@ for meth_file in meth_files:
     if not str(meth_df['chrom'].iloc[0]).startswith('chr'):
         meth_df['chrom'] = 'chr' + meth_df['chrom'].astype(str)
     
-    mc_chrom, hmc_chrom = {}, {}
-    for chrom in chromosomes:
+    mc_chrom_list, hmc_chrom_list = [], []
+    for chrom in tqdm(chromosomes, desc="Meth chrom"):
         if chrom not in chrom_sizes:
             continue
         bins = np.arange(0, chrom_sizes[chrom], chrom_bin_size)
@@ -205,8 +223,21 @@ for meth_file in meth_files:
                 mc_bins[idx].append(row['percent_m'])
                 hmc_bins[idx].append(row['percent_h'])
         
-        mc_chrom[chrom] = [np.nanmean(b) if b else np.nan for b in mc_bins]
-        hmc_chrom[chrom] = [np.nanmean(b) if b else np.nan for b in hmc_bins]
+        for idx, start in enumerate(bins):
+            mc_chrom_list.append({
+                'chrom': chrom,
+                'bin_start': start,
+                'bin_end': start + chrom_bin_size,
+                'bin_index': idx,
+                'mean_5mc': np.nanmean(mc_bins[idx]) if mc_bins[idx] else np.nan
+            })
+            hmc_chrom_list.append({
+                'chrom': chrom,
+                'bin_start': start,
+                'bin_end': start + chrom_bin_size,
+                'bin_index': idx,
+                'mean_5hmc': np.nanmean(hmc_bins[idx]) if hmc_bins[idx] else np.nan
+            })
     
     meth_genes = []
     for _, gene in tqdm(genes_df.iterrows(), total=len(genes_df), desc="  Meth genes"):
@@ -223,12 +254,12 @@ for meth_file in meth_files:
             'mean_5hmc': gene_meth['percent_h'].mean() if len(gene_meth) > 0 else np.nan
         })
     
-    all_data[sample]['mc_chrom'] = mc_chrom
-    all_data[sample]['hmc_chrom'] = hmc_chrom
+    all_data[sample]['mc_chrom'] = pd.DataFrame(mc_chrom_list)
+    all_data[sample]['hmc_chrom'] = pd.DataFrame(hmc_chrom_list)
     all_data[sample]['meth_genes'] = pd.DataFrame(meth_genes)
     
-    pd.DataFrame(mc_chrom).to_csv(os.path.join(out_dir, f'{sample}_5mc_chrom.csv'), index=False)
-    pd.DataFrame(hmc_chrom).to_csv(os.path.join(out_dir, f'{sample}_5hmc_chrom.csv'), index=False)
+    all_data[sample]['mc_chrom'].to_csv(os.path.join(out_dir, f'{sample}_5mc_chrom.csv'), index=False)
+    all_data[sample]['hmc_chrom'].to_csv(os.path.join(out_dir, f'{sample}_5hmc_chrom.csv'), index=False)
     all_data[sample]['meth_genes'].to_csv(os.path.join(out_dir, f'{sample}_meth_genes.csv'), index=False)
 
 # Gene-level CXXC4
@@ -261,35 +292,41 @@ for sample in samples:
         if chrom not in chrom_sizes:
             continue
         
-        bins = np.arange(0, chrom_sizes[chrom], chrom_bin_size) / 1e6
-        vaf = np.array(all_data[sample]['vaf_chrom'].get(chrom, []))
-        mc = np.array(all_data[sample]['mc_chrom'].get(chrom, []))
-        hmc = np.array(all_data[sample]['hmc_chrom'].get(chrom, []))
-        cxxc4 = np.array(cxxc4_chrom.get(chrom, []))
+        # Filter data for this chromosome
+        vaf_data = all_data[sample]['vaf_chrom'][all_data[sample]['vaf_chrom']['chrom'] == chrom]
+        mc_data = all_data[sample]['mc_chrom'][all_data[sample]['mc_chrom']['chrom'] == chrom]
+        hmc_data = all_data[sample]['hmc_chrom'][all_data[sample]['hmc_chrom']['chrom'] == chrom]
+        cxxc4_data = cxxc4_chrom_df[cxxc4_chrom_df['chrom'] == chrom]
         
-        if len(vaf) == 0:
+        if len(vaf_data) == 0:
             continue
+        
+        bins = vaf_data['bin_start'].values / 1e6
+        vaf = vaf_data['mean_vaf'].values
+        mc = mc_data['mean_5mc'].values
+        hmc = hmc_data['mean_5hmc'].values
+        cxxc4 = cxxc4_data['cxxc4_signal'].values
         
         fig, axes = plt.subplots(4, 1, figsize=(18, 12), sharex=True)
         
-        axes[0].fill_between(bins[:len(vaf)], gaussian_filter1d(np.nan_to_num(vaf), 1.5), alpha=0.5, color='#e74c3c')
-        axes[0].plot(bins[:len(vaf)], gaussian_filter1d(np.nan_to_num(vaf), 1.5), linewidth=2, color='#c0392b')
+        axes[0].fill_between(bins, gaussian_filter1d(np.nan_to_num(vaf), 1.5), alpha=0.5, color='#e74c3c')
+        axes[0].plot(bins, gaussian_filter1d(np.nan_to_num(vaf), 1.5), linewidth=2, color='#c0392b')
         axes[0].set_ylabel('VAF', fontweight='bold')
         axes[0].set_title(f'{sample} - {chrom}', fontsize=14, fontweight='bold')
         axes[0].grid(alpha=0.2)
         
-        axes[1].fill_between(bins[:len(mc)], gaussian_filter1d(np.nan_to_num(mc), 1.5), alpha=0.5, color='#3498db')
-        axes[1].plot(bins[:len(mc)], gaussian_filter1d(np.nan_to_num(mc), 1.5), linewidth=2, color='#2980b9')
+        axes[1].fill_between(bins, gaussian_filter1d(np.nan_to_num(mc), 1.5), alpha=0.5, color='#3498db')
+        axes[1].plot(bins, gaussian_filter1d(np.nan_to_num(mc), 1.5), linewidth=2, color='#2980b9')
         axes[1].set_ylabel('5mC (%)', fontweight='bold')
         axes[1].grid(alpha=0.2)
         
-        axes[2].fill_between(bins[:len(hmc)], gaussian_filter1d(np.nan_to_num(hmc), 1.5), alpha=0.5, color='#2ecc71')
-        axes[2].plot(bins[:len(hmc)], gaussian_filter1d(np.nan_to_num(hmc), 1.5), linewidth=2, color='#27ae60')
+        axes[2].fill_between(bins, gaussian_filter1d(np.nan_to_num(hmc), 1.5), alpha=0.5, color='#2ecc71')
+        axes[2].plot(bins, gaussian_filter1d(np.nan_to_num(hmc), 1.5), linewidth=2, color='#27ae60')
         axes[2].set_ylabel('5hmC (%)', fontweight='bold')
         axes[2].grid(alpha=0.2)
         
-        axes[3].fill_between(bins[:len(cxxc4)], gaussian_filter1d(cxxc4, 1.5), alpha=0.5, color='#9b59b6')
-        axes[3].plot(bins[:len(cxxc4)], gaussian_filter1d(cxxc4, 1.5), linewidth=2, color='#8e44ad')
+        axes[3].fill_between(bins, gaussian_filter1d(cxxc4, 1.5), alpha=0.5, color='#9b59b6')
+        axes[3].plot(bins, gaussian_filter1d(cxxc4, 1.5), linewidth=2, color='#8e44ad')
         axes[3].set_ylabel('CXXC4', fontweight='bold')
         axes[3].set_xlabel('Position (Mb)', fontweight='bold')
         axes[3].grid(alpha=0.2)
@@ -311,6 +348,10 @@ for sample in samples:
     fig, axes = plt.subplots(2, 3, figsize=(18, 12))
     
     df = gene_data.dropna(subset=['mean_vaf', 'mean_5mc', 'mean_5hmc'])
+    
+    if len(df) == 0:
+        print(f"  Warning: No valid data for {sample}, skipping gene plots")
+        continue
     
     axes[0,0].hexbin(df['mean_vaf'], df['mean_5mc'], gridsize=40, cmap='Blues', mincnt=1)
     axes[0,0].set_xlabel('VAF', fontweight='bold')
