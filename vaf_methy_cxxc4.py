@@ -69,11 +69,12 @@ genes_df = genes_df[genes_df['length'] > 500]
 print(f"  {len(genes_df)} genes")
 
 # -------------------
-# Load CXXC4 - 5 column BED
+# Load CXXC4 - 5 column BED (FIXED)
 # -------------------
 print("Loading CXXC4...")
 cxxc4_df = pd.read_csv(cxxc4_file, sep='\t', header=None,
-                       names=['chrom', 'start', 'end', 'name', 'score'])
+                       names=['chrom', 'start', 'end', 'name', 'score'],
+                       usecols=[0, 1, 2, 3, 4])
 print(f"  {len(cxxc4_df)} peaks")
 
 # Chromosome-level CXXC4
