@@ -77,7 +77,7 @@ cxxc4_df = pd.read_csv(cxxc4_file, sep='\t', header=None,
                        usecols=[0, 1, 2, 3, 4])
 print(f"  {len(cxxc4_df)} peaks")
 
-# Chromosome-level CXXC4 - FIXED: Use long format
+# Chromosome-level CXXC4
 print("Processing CXXC4 by chromosome...")
 cxxc4_chrom_list = []
 for chrom in tqdm(chromosomes, desc="CXXC4 bins"):
@@ -282,110 +282,163 @@ cxxc4_genes_df = pd.DataFrame(cxxc4_genes)
 cxxc4_genes_df.to_csv(os.path.join(out_dir, 'cxxc4_genes.csv'), index=False)
 
 # -------------------
-# Chromosome-level plots
+# REVISED: Chromosome-level plots - All samples side by side
 # -------------------
-print("\nPlotting...")
+print("\nPlotting chromosomes (multi-sample comparison)...")
 samples = [s for s in all_data.keys() if 'vaf_chrom' in all_data[s] and 'mc_chrom' in all_data[s]]
+n_samples = len(samples)
 
-for sample in samples:
-    for chrom in tqdm(chromosomes, desc=sample):
+if n_samples > 0:
+    for chrom in tqdm(chromosomes, desc="Chromosomes"):
         if chrom not in chrom_sizes:
             continue
         
-        # Filter data for this chromosome
-        vaf_data = all_data[sample]['vaf_chrom'][all_data[sample]['vaf_chrom']['chrom'] == chrom]
-        mc_data = all_data[sample]['mc_chrom'][all_data[sample]['mc_chrom']['chrom'] == chrom]
-        hmc_data = all_data[sample]['hmc_chrom'][all_data[sample]['hmc_chrom']['chrom'] == chrom]
-        cxxc4_data = cxxc4_chrom_df[cxxc4_chrom_df['chrom'] == chrom]
+        # Check if any sample has data for this chromosome
+        has_data = False
+        for sample in samples:
+            vaf_data = all_data[sample]['vaf_chrom'][all_data[sample]['vaf_chrom']['chrom'] == chrom]
+            if len(vaf_data) > 0:
+                has_data = True
+                break
         
-        if len(vaf_data) == 0:
+        if not has_data:
             continue
         
-        bins = vaf_data['bin_start'].values / 1e6
-        vaf = vaf_data['mean_vaf'].values
-        mc = mc_data['mean_5mc'].values
-        hmc = hmc_data['mean_5hmc'].values
-        cxxc4 = cxxc4_data['cxxc4_signal'].values
+        # Create figure: 4 metrics x n_samples
+        fig, axes = plt.subplots(4, n_samples, figsize=(6*n_samples, 12), 
+                                sharex=True, sharey='row')
         
-        fig, axes = plt.subplots(4, 1, figsize=(18, 12), sharex=True)
+        # Handle single sample case
+        if n_samples == 1:
+            axes = axes.reshape(-1, 1)
         
-        axes[0].fill_between(bins, gaussian_filter1d(np.nan_to_num(vaf), 1.5), alpha=0.5, color='#e74c3c')
-        axes[0].plot(bins, gaussian_filter1d(np.nan_to_num(vaf), 1.5), linewidth=2, color='#c0392b')
-        axes[0].set_ylabel('VAF', fontweight='bold')
-        axes[0].set_title(f'{sample} - {chrom}', fontsize=14, fontweight='bold')
-        axes[0].grid(alpha=0.2)
+        for col, sample in enumerate(samples):
+            vaf_data = all_data[sample]['vaf_chrom'][all_data[sample]['vaf_chrom']['chrom'] == chrom]
+            mc_data = all_data[sample]['mc_chrom'][all_data[sample]['mc_chrom']['chrom'] == chrom]
+            hmc_data = all_data[sample]['hmc_chrom'][all_data[sample]['hmc_chrom']['chrom'] == chrom]
+            cxxc4_data = cxxc4_chrom_df[cxxc4_chrom_df['chrom'] == chrom]
+            
+            if len(vaf_data) == 0:
+                continue
+            
+            bins = vaf_data['bin_start'].values / 1e6
+            vaf = vaf_data['mean_vaf'].values
+            mc = mc_data['mean_5mc'].values
+            hmc = hmc_data['mean_5hmc'].values
+            cxxc4 = cxxc4_data['cxxc4_signal'].values
+            
+            # VAF
+            axes[0, col].fill_between(bins, gaussian_filter1d(np.nan_to_num(vaf), 1.5), 
+                                     alpha=0.5, color='#e74c3c')
+            axes[0, col].plot(bins, gaussian_filter1d(np.nan_to_num(vaf), 1.5), 
+                             linewidth=2, color='#c0392b')
+            axes[0, col].set_title(f'{sample}', fontsize=12, fontweight='bold')
+            axes[0, col].grid(alpha=0.2)
+            if col == 0:
+                axes[0, col].set_ylabel('VAF', fontweight='bold')
+            
+            # 5mC
+            axes[1, col].fill_between(bins, gaussian_filter1d(np.nan_to_num(mc), 1.5), 
+                                     alpha=0.5, color='#3498db')
+            axes[1, col].plot(bins, gaussian_filter1d(np.nan_to_num(mc), 1.5), 
+                             linewidth=2, color='#2980b9')
+            axes[1, col].grid(alpha=0.2)
+            if col == 0:
+                axes[1, col].set_ylabel('5mC (%)', fontweight='bold')
+            
+            # 5hmC
+            axes[2, col].fill_between(bins, gaussian_filter1d(np.nan_to_num(hmc), 1.5), 
+                                     alpha=0.5, color='#2ecc71')
+            axes[2, col].plot(bins, gaussian_filter1d(np.nan_to_num(hmc), 1.5), 
+                             linewidth=2, color='#27ae60')
+            axes[2, col].grid(alpha=0.2)
+            if col == 0:
+                axes[2, col].set_ylabel('5hmC (%)', fontweight='bold')
+            
+            # CXXC4
+            axes[3, col].fill_between(bins, gaussian_filter1d(cxxc4, 1.5), 
+                                     alpha=0.5, color='#9b59b6')
+            axes[3, col].plot(bins, gaussian_filter1d(cxxc4, 1.5), 
+                             linewidth=2, color='#8e44ad')
+            axes[3, col].set_xlabel('Position (Mb)', fontweight='bold')
+            axes[3, col].grid(alpha=0.2)
+            if col == 0:
+                axes[3, col].set_ylabel('CXXC4', fontweight='bold')
         
-        axes[1].fill_between(bins, gaussian_filter1d(np.nan_to_num(mc), 1.5), alpha=0.5, color='#3498db')
-        axes[1].plot(bins, gaussian_filter1d(np.nan_to_num(mc), 1.5), linewidth=2, color='#2980b9')
-        axes[1].set_ylabel('5mC (%)', fontweight='bold')
-        axes[1].grid(alpha=0.2)
-        
-        axes[2].fill_between(bins, gaussian_filter1d(np.nan_to_num(hmc), 1.5), alpha=0.5, color='#2ecc71')
-        axes[2].plot(bins, gaussian_filter1d(np.nan_to_num(hmc), 1.5), linewidth=2, color='#27ae60')
-        axes[2].set_ylabel('5hmC (%)', fontweight='bold')
-        axes[2].grid(alpha=0.2)
-        
-        axes[3].fill_between(bins, gaussian_filter1d(cxxc4, 1.5), alpha=0.5, color='#9b59b6')
-        axes[3].plot(bins, gaussian_filter1d(cxxc4, 1.5), linewidth=2, color='#8e44ad')
-        axes[3].set_ylabel('CXXC4', fontweight='bold')
-        axes[3].set_xlabel('Position (Mb)', fontweight='bold')
-        axes[3].grid(alpha=0.2)
-        
+        plt.suptitle(f'{chrom} - Multi-Sample Comparison', fontsize=16, fontweight='bold', y=0.995)
         plt.tight_layout()
-        plt.savefig(os.path.join(out_dir, f'{sample}_{chrom}_chrom.png'), dpi=300, bbox_inches='tight')
+        plt.savefig(os.path.join(out_dir, f'ALL_SAMPLES_{chrom}_comparison.png'), 
+                   dpi=300, bbox_inches='tight')
         plt.close()
 
 # -------------------
-# Gene-level analysis
+# REVISED: Gene-level analysis - Side by side comparison
 # -------------------
+print("\nPlotting gene-level comparisons...")
+
+# First save individual integrated files
 for sample in samples:
     gene_data = all_data[sample]['vaf_genes'].merge(
         all_data[sample]['meth_genes'], on=['gene', 'chrom']
     ).merge(cxxc4_genes_df, on=['gene', 'chrom'])
-    
     gene_data.to_csv(os.path.join(out_dir, f'{sample}_gene_integrated.csv'), index=False)
-    
-    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+
+# Create side-by-side comparison plots
+fig, axes = plt.subplots(6, n_samples, figsize=(6*n_samples, 24))
+if n_samples == 1:
+    axes = axes.reshape(-1, 1)
+
+for col, sample in enumerate(samples):
+    gene_data = all_data[sample]['vaf_genes'].merge(
+        all_data[sample]['meth_genes'], on=['gene', 'chrom']
+    ).merge(cxxc4_genes_df, on=['gene', 'chrom'])
     
     df = gene_data.dropna(subset=['mean_vaf', 'mean_5mc', 'mean_5hmc'])
     
     if len(df) == 0:
-        print(f"  Warning: No valid data for {sample}, skipping gene plots")
+        print(f"  Warning: No valid data for {sample}, skipping")
         continue
     
-    axes[0,0].hexbin(df['mean_vaf'], df['mean_5mc'], gridsize=40, cmap='Blues', mincnt=1)
-    axes[0,0].set_xlabel('VAF', fontweight='bold')
-    axes[0,0].set_ylabel('5mC', fontweight='bold')
-    axes[0,0].set_title('VAF vs 5mC')
+    # VAF vs 5mC
+    axes[0, col].hexbin(df['mean_vaf'], df['mean_5mc'], gridsize=40, cmap='Blues', mincnt=1)
+    axes[0, col].set_title(f'{sample}', fontweight='bold')
+    axes[0, col].set_xlabel('VAF', fontweight='bold')
+    if col == 0:
+        axes[0, col].set_ylabel('5mC', fontweight='bold')
     
-    axes[0,1].hexbin(df['mean_vaf'], df['mean_5hmc'], gridsize=40, cmap='Greens', mincnt=1)
-    axes[0,1].set_xlabel('VAF', fontweight='bold')
-    axes[0,1].set_ylabel('5hmC', fontweight='bold')
-    axes[0,1].set_title('VAF vs 5hmC')
+    # VAF vs 5hmC
+    axes[1, col].hexbin(df['mean_vaf'], df['mean_5hmc'], gridsize=40, cmap='Greens', mincnt=1)
+    axes[1, col].set_xlabel('VAF', fontweight='bold')
+    if col == 0:
+        axes[1, col].set_ylabel('5hmC', fontweight='bold')
     
-    axes[0,2].hexbin(df['mean_vaf'], df['cxxc4_signal'], gridsize=40, cmap='Purples', mincnt=1)
-    axes[0,2].set_xlabel('VAF', fontweight='bold')
-    axes[0,2].set_ylabel('CXXC4', fontweight='bold')
-    axes[0,2].set_title('VAF vs CXXC4')
+    # VAF vs CXXC4
+    axes[2, col].hexbin(df['mean_vaf'], df['cxxc4_signal'], gridsize=40, cmap='Purples', mincnt=1)
+    axes[2, col].set_xlabel('VAF', fontweight='bold')
+    if col == 0:
+        axes[2, col].set_ylabel('CXXC4', fontweight='bold')
     
-    axes[1,0].hexbin(df['mean_5mc'], df['mean_5hmc'], gridsize=40, cmap='viridis', mincnt=1)
-    axes[1,0].set_xlabel('5mC', fontweight='bold')
-    axes[1,0].set_ylabel('5hmC', fontweight='bold')
-    axes[1,0].set_title('5mC vs 5hmC')
+    # 5mC vs 5hmC
+    axes[3, col].hexbin(df['mean_5mc'], df['mean_5hmc'], gridsize=40, cmap='viridis', mincnt=1)
+    axes[3, col].set_xlabel('5mC', fontweight='bold')
+    if col == 0:
+        axes[3, col].set_ylabel('5hmC', fontweight='bold')
     
-    axes[1,1].hexbin(df['mean_5mc'], df['cxxc4_signal'], gridsize=40, cmap='plasma', mincnt=1)
-    axes[1,1].set_xlabel('5mC', fontweight='bold')
-    axes[1,1].set_ylabel('CXXC4', fontweight='bold')
-    axes[1,1].set_title('5mC vs CXXC4')
+    # 5mC vs CXXC4
+    axes[4, col].hexbin(df['mean_5mc'], df['cxxc4_signal'], gridsize=40, cmap='plasma', mincnt=1)
+    axes[4, col].set_xlabel('5mC', fontweight='bold')
+    if col == 0:
+        axes[4, col].set_ylabel('CXXC4', fontweight='bold')
     
-    axes[1,2].hexbin(df['mean_5hmc'], df['cxxc4_signal'], gridsize=40, cmap='magma', mincnt=1)
-    axes[1,2].set_xlabel('5hmC', fontweight='bold')
-    axes[1,2].set_ylabel('CXXC4', fontweight='bold')
-    axes[1,2].set_title('5hmC vs CXXC4')
-    
-    plt.suptitle(f'{sample}: Gene-level', fontsize=16, fontweight='bold')
-    plt.tight_layout()
-    plt.savefig(os.path.join(out_dir, f'{sample}_gene_scatter.png'), dpi=300, bbox_inches='tight')
-    plt.close()
+    # 5hmC vs CXXC4
+    axes[5, col].hexbin(df['mean_5hmc'], df['cxxc4_signal'], gridsize=40, cmap='magma', mincnt=1)
+    axes[5, col].set_xlabel('5hmC', fontweight='bold')
+    if col == 0:
+        axes[5, col].set_ylabel('CXXC4', fontweight='bold')
+
+plt.suptitle('Gene-level Multi-Sample Comparison', fontsize=16, fontweight='bold', y=0.998)
+plt.tight_layout()
+plt.savefig(os.path.join(out_dir, 'ALL_SAMPLES_gene_comparison.png'), dpi=300, bbox_inches='tight')
+plt.close()
 
 print(f"\n✓ Complete: {out_dir}/")
