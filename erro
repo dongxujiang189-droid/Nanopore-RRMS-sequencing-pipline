@@ -2,23 +2,20 @@
 Loading genes...
   48404 genes
 Loading CXXC4...
+  17089 peaks
 Traceback (most recent call last):
-  File "/mnt/e/Data/seq_for_human_293t2/barcode04/vaf_methy_cxxc4.py", line 75, in <module>
-    cxxc4_df = pd.read_csv(cxxc4_file, sep='\t', header=None,
-               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/mnt/e/Data/seq_for_human_293t2/barcode04/seq_env/lib/python3.12/site-packages/pandas/io/parsers/readers.py", line 1026, in read_csv
-    return _read(filepath_or_buffer, kwds)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/mnt/e/Data/seq_for_human_293t2/barcode04/seq_env/lib/python3.12/site-packages/pandas/io/parsers/readers.py", line 620, in _read
-    parser = TextFileReader(filepath_or_buffer, **kwds)
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/mnt/e/Data/seq_for_human_293t2/barcode04/seq_env/lib/python3.12/site-packages/pandas/io/parsers/readers.py", line 1620, in __init__
-    self._engine = self._make_engine(f, self.engine)
-                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/mnt/e/Data/seq_for_human_293t2/barcode04/seq_env/lib/python3.12/site-packages/pandas/io/parsers/readers.py", line 1880, in _make_engine
-    self.handles = get_handle(
-                   ^^^^^^^^^^^
-  File "/mnt/e/Data/seq_for_human_293t2/barcode04/seq_env/lib/python3.12/site-packages/pandas/io/common.py", line 873, in get_handle
-    handle = open(
-             ^^^^^
-FileNotFoundError: [Errno 2] No such file or directory: '/mnt/e/Data/seq_for_human_293t2/cxxc4_binding/GSM1054009_Myc-Idax_vs_empty.bed'
+  File "/mnt/e/Data/seq_for_human_293t2/barcode04/vaf_methy_cxxc4.py", line 97, in <module>
+    pd.DataFrame(cxxc4_chrom).to_csv(os.path.join(out_dir, 'cxxc4_chromosome.csv'), index=False)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/e/Data/seq_for_human_293t2/barcode04/seq_env/lib/python3.12/site-packages/pandas/core/frame.py", line 782, in __init__
+    mgr = dict_to_mgr(data, index, columns, dtype=dtype, copy=copy, typ=manager)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/e/Data/seq_for_human_293t2/barcode04/seq_env/lib/python3.12/site-packages/pandas/core/internals/construction.py", line 503, in dict_to_mgr
+    return arrays_to_mgr(arrays, columns, index, dtype=dtype, typ=typ, consolidate=copy)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/e/Data/seq_for_human_293t2/barcode04/seq_env/lib/python3.12/site-packages/pandas/core/internals/construction.py", line 114, in arrays_to_mgr
+    index = _extract_index(arrays)
+            ^^^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/e/Data/seq_for_human_293t2/barcode04/seq_env/lib/python3.12/site-packages/pandas/core/internals/construction.py", line 677, in _extract_index
+    raise ValueError("All arrays must be of the same length")
+ValueError: All arrays must be of the same length
