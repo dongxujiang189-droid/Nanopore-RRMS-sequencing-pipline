@@ -9,10 +9,10 @@ import pysam
 import seaborn as sns
 
 # Configuration
-base_dir = "/mnt/e/Data/seq_for_human_293t2/"
+base_dir = "/mnt/c/Data/seq_for_human_293t2/"
 vcf_pattern = os.path.join(base_dir, "clair3_output_variants calling", "*_clair3", "full_alignment.vcf.gz")
 meth_pattern = os.path.join(base_dir, "modkit", "*_aligned_with_mod.region_mh.stats.tsv")
-gtf_file = "/mnt/e/annotations/Homo_sapiens.GRCh38.gtf"
+gtf_file = "/mnt/c/annotations/Homo_sapiens.GRCh38.gtf"
 out_dir = os.path.join(base_dir, "mutation_dotplot_analysis")
 os.makedirs(out_dir, exist_ok=True)
 
