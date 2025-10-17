@@ -77,7 +77,7 @@ cxxc4_df = pd.read_csv(cxxc4_file, sep='\t', header=None,
                        usecols=[0, 1, 2, 3, 4])
 print(f"  {len(cxxc4_df)} peaks")
 
-# Chromosome-level CXXC4 - FIXED: Use long format
+# Chromosome-level CXXC4
 print("Processing CXXC4 by chromosome...")
 cxxc4_chrom_list = []
 for chrom in tqdm(chromosomes, desc="CXXC4 bins"):
@@ -292,7 +292,6 @@ for sample in samples:
         if chrom not in chrom_sizes:
             continue
         
-        # Filter data for this chromosome
         vaf_data = all_data[sample]['vaf_chrom'][all_data[sample]['vaf_chrom']['chrom'] == chrom]
         mc_data = all_data[sample]['mc_chrom'][all_data[sample]['mc_chrom']['chrom'] == chrom]
         hmc_data = all_data[sample]['hmc_chrom'][all_data[sample]['hmc_chrom']['chrom'] == chrom]
@@ -336,7 +335,7 @@ for sample in samples:
         plt.close()
 
 # -------------------
-# Gene-level analysis
+# Gene-level analysis - FOCUSED PLOTS
 # -------------------
 for sample in samples:
     gene_data = all_data[sample]['vaf_genes'].merge(
@@ -345,45 +344,139 @@ for sample in samples:
     
     gene_data.to_csv(os.path.join(out_dir, f'{sample}_gene_integrated.csv'), index=False)
     
-    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
-    
-    df = gene_data.dropna(subset=['mean_vaf', 'mean_5mc', 'mean_5hmc'])
+    df = gene_data.dropna(subset=['mean_vaf', 'mean_5mc', 'mean_5hmc', 'cxxc4_signal'])
     
     if len(df) == 0:
         print(f"  Warning: No valid data for {sample}, skipping gene plots")
         continue
     
+    # FOCUSED PLOTS: VAF vs 5hmC and 5hmC vs CXXC4
+    fig, axes = plt.subplots(1, 2, figsize=(16, 7))
+    
+    # Plot 1: VAF vs 5hmC with equal scaling
+    valid_vaf_hmc = df[(df['mean_vaf'] > 0) & (df['mean_5hmc'] > 0)]
+    if len(valid_vaf_hmc) > 0:
+        # Log transform for better visualization
+        log_vaf = np.log10(valid_vaf_hmc['mean_vaf'])
+        log_hmc = np.log10(valid_vaf_hmc['mean_5hmc'])
+        
+        # Equal axis range
+        all_min = min(log_vaf.min(), log_hmc.min())
+        all_max = max(log_vaf.max(), log_hmc.max())
+        
+        axes[0].hexbin(log_vaf, log_hmc, gridsize=50, cmap='viridis', mincnt=1)
+        axes[0].plot([all_min, all_max], [all_min, all_max], 'r--', linewidth=2, alpha=0.5, label='y=x')
+        axes[0].set_xlim(all_min, all_max)
+        axes[0].set_ylim(all_min, all_max)
+        axes[0].set_aspect('equal', adjustable='box')
+        axes[0].set_xlabel('log10(VAF)', fontweight='bold', fontsize=12)
+        axes[0].set_ylabel('log10(5hmC %)', fontweight='bold', fontsize=12)
+        axes[0].set_title('VAF vs 5hmC', fontsize=14, fontweight='bold')
+        axes[0].legend()
+        axes[0].grid(alpha=0.3)
+        
+        # Calculate correlation
+        corr_vaf_hmc, p_vaf_hmc = stats.pearsonr(log_vaf, log_hmc)
+        axes[0].text(0.05, 0.95, f'r = {corr_vaf_hmc:.3f}\np = {p_vaf_hmc:.2e}', 
+                    transform=axes[0].transAxes, fontsize=11, verticalalignment='top',
+                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    
+    # Plot 2: 5hmC vs CXXC4 with equal scaling
+    valid_hmc_cxxc4 = df[(df['mean_5hmc'] > 0) & (df['cxxc4_signal'] > 0)]
+    if len(valid_hmc_cxxc4) > 0:
+        # Log transform
+        log_hmc2 = np.log10(valid_hmc_cxxc4['mean_5hmc'])
+        log_cxxc4 = np.log10(valid_hmc_cxxc4['cxxc4_signal'])
+        
+        # Equal axis range
+        all_min2 = min(log_hmc2.min(), log_cxxc4.min())
+        all_max2 = max(log_hmc2.max(), log_cxxc4.max())
+        
+        axes[1].hexbin(log_hmc2, log_cxxc4, gridsize=50, cmap='plasma', mincnt=1)
+        axes[1].plot([all_min2, all_max2], [all_min2, all_max2], 'r--', linewidth=2, alpha=0.5, label='y=x')
+        axes[1].set_xlim(all_min2, all_max2)
+        axes[1].set_ylim(all_min2, all_max2)
+        axes[1].set_aspect('equal', adjustable='box')
+        axes[1].set_xlabel('log10(5hmC %)', fontweight='bold', fontsize=12)
+        axes[1].set_ylabel('log10(CXXC4 signal)', fontweight='bold', fontsize=12)
+        axes[1].set_title('5hmC vs CXXC4', fontsize=14, fontweight='bold')
+        axes[1].legend()
+        axes[1].grid(alpha=0.3)
+        
+        # Calculate correlation
+        corr_hmc_cxxc4, p_hmc_cxxc4 = stats.pearsonr(log_hmc2, log_cxxc4)
+        axes[1].text(0.05, 0.95, f'r = {corr_hmc_cxxc4:.3f}\np = {p_hmc_cxxc4:.2e}', 
+                    transform=axes[1].transAxes, fontsize=11, verticalalignment='top',
+                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    
+    plt.suptitle(f'{sample}: Key Gene-Level Relationships', fontsize=16, fontweight='bold')
+    plt.tight_layout()
+    plt.savefig(os.path.join(out_dir, f'{sample}_focused_plots.png'), dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # ALL 6 PLOTS with equal scaling where appropriate
+    fig, axes = plt.subplots(2, 3, figsize=(20, 12))
+    
+    # Plot 1: VAF vs 5mC
     axes[0,0].hexbin(df['mean_vaf'], df['mean_5mc'], gridsize=40, cmap='Blues', mincnt=1)
     axes[0,0].set_xlabel('VAF', fontweight='bold')
-    axes[0,0].set_ylabel('5mC', fontweight='bold')
+    axes[0,0].set_ylabel('5mC (%)', fontweight='bold')
     axes[0,0].set_title('VAF vs 5mC')
+    axes[0,0].grid(alpha=0.2)
     
-    axes[0,1].hexbin(df['mean_vaf'], df['mean_5hmc'], gridsize=40, cmap='Greens', mincnt=1)
-    axes[0,1].set_xlabel('VAF', fontweight='bold')
-    axes[0,1].set_ylabel('5hmC', fontweight='bold')
-    axes[0,1].set_title('VAF vs 5hmC')
+    # Plot 2: VAF vs 5hmC (log scale, equal axes)
+    if len(valid_vaf_hmc) > 0:
+        axes[0,1].hexbin(log_vaf, log_hmc, gridsize=40, cmap='Greens', mincnt=1)
+        axes[0,1].plot([all_min, all_max], [all_min, all_max], 'r--', linewidth=1.5, alpha=0.5)
+        axes[0,1].set_xlim(all_min, all_max)
+        axes[0,1].set_ylim(all_min, all_max)
+        axes[0,1].set_aspect('equal', adjustable='box')
+        axes[0,1].set_xlabel('log10(VAF)', fontweight='bold')
+        axes[0,1].set_ylabel('log10(5hmC %)', fontweight='bold')
+        axes[0,1].set_title(f'VAF vs 5hmC (r={corr_vaf_hmc:.3f})')
+        axes[0,1].grid(alpha=0.2)
     
+    # Plot 3: VAF vs CXXC4
     axes[0,2].hexbin(df['mean_vaf'], df['cxxc4_signal'], gridsize=40, cmap='Purples', mincnt=1)
     axes[0,2].set_xlabel('VAF', fontweight='bold')
     axes[0,2].set_ylabel('CXXC4', fontweight='bold')
     axes[0,2].set_title('VAF vs CXXC4')
+    axes[0,2].grid(alpha=0.2)
     
-    axes[1,0].hexbin(df['mean_5mc'], df['mean_5hmc'], gridsize=40, cmap='viridis', mincnt=1)
-    axes[1,0].set_xlabel('5mC', fontweight='bold')
-    axes[1,0].set_ylabel('5hmC', fontweight='bold')
-    axes[1,0].set_title('5mC vs 5hmC')
+    # Plot 4: 5mC vs 5hmC (equal axes)
+    valid_mc_hmc = df[(df['mean_5mc'] > 0) & (df['mean_5hmc'] > 0)]
+    if len(valid_mc_hmc) > 0:
+        mc_max = max(df['mean_5mc'].max(), df['mean_5hmc'].max())
+        axes[1,0].hexbin(df['mean_5mc'], df['mean_5hmc'], gridsize=40, cmap='viridis', mincnt=1)
+        axes[1,0].plot([0, mc_max], [0, mc_max], 'r--', linewidth=1.5, alpha=0.5)
+        axes[1,0].set_xlim(0, mc_max)
+        axes[1,0].set_ylim(0, mc_max)
+        axes[1,0].set_aspect('equal', adjustable='box')
+        axes[1,0].set_xlabel('5mC (%)', fontweight='bold')
+        axes[1,0].set_ylabel('5hmC (%)', fontweight='bold')
+        axes[1,0].set_title('5mC vs 5hmC')
+        axes[1,0].grid(alpha=0.2)
     
+    # Plot 5: 5mC vs CXXC4
     axes[1,1].hexbin(df['mean_5mc'], df['cxxc4_signal'], gridsize=40, cmap='plasma', mincnt=1)
-    axes[1,1].set_xlabel('5mC', fontweight='bold')
+    axes[1,1].set_xlabel('5mC (%)', fontweight='bold')
     axes[1,1].set_ylabel('CXXC4', fontweight='bold')
     axes[1,1].set_title('5mC vs CXXC4')
+    axes[1,1].grid(alpha=0.2)
     
-    axes[1,2].hexbin(df['mean_5hmc'], df['cxxc4_signal'], gridsize=40, cmap='magma', mincnt=1)
-    axes[1,2].set_xlabel('5hmC', fontweight='bold')
-    axes[1,2].set_ylabel('CXXC4', fontweight='bold')
-    axes[1,2].set_title('5hmC vs CXXC4')
+    # Plot 6: 5hmC vs CXXC4 (log scale, equal axes)
+    if len(valid_hmc_cxxc4) > 0:
+        axes[1,2].hexbin(log_hmc2, log_cxxc4, gridsize=40, cmap='magma', mincnt=1)
+        axes[1,2].plot([all_min2, all_max2], [all_min2, all_max2], 'r--', linewidth=1.5, alpha=0.5)
+        axes[1,2].set_xlim(all_min2, all_max2)
+        axes[1,2].set_ylim(all_min2, all_max2)
+        axes[1,2].set_aspect('equal', adjustable='box')
+        axes[1,2].set_xlabel('log10(5hmC %)', fontweight='bold')
+        axes[1,2].set_ylabel('log10(CXXC4 signal)', fontweight='bold')
+        axes[1,2].set_title(f'5hmC vs CXXC4 (r={corr_hmc_cxxc4:.3f})')
+        axes[1,2].grid(alpha=0.2)
     
-    plt.suptitle(f'{sample}: Gene-level', fontsize=16, fontweight='bold')
+    plt.suptitle(f'{sample}: Complete Gene-level Analysis', fontsize=16, fontweight='bold')
     plt.tight_layout()
     plt.savefig(os.path.join(out_dir, f'{sample}_gene_scatter.png'), dpi=300, bbox_inches='tight')
     plt.close()
