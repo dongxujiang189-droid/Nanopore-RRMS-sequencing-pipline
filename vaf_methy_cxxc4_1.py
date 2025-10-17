@@ -152,6 +152,7 @@ for vcf_file in vcf_files:
                 'n_variants': len(vafs)
             })
     
+    # MODIFIED: Calculate both mean and total VAF per gene
     vaf_genes = []
     for _, gene in tqdm(genes_df.iterrows(), total=len(genes_df), desc="  VAF genes"):
         try:
@@ -170,6 +171,7 @@ for vcf_file in vcf_files:
                 'gene': gene['name'],
                 'chrom': gene['chrom'],
                 'mean_vaf': np.nanmean(vafs) if vafs else np.nan,
+                'total_vaf': np.sum(vafs) if vafs else 0,  # Sum of all VAFs
                 'n_variants': len(vafs)
             })
         except:
@@ -177,6 +179,7 @@ for vcf_file in vcf_files:
                 'gene': gene['name'],
                 'chrom': gene['chrom'],
                 'mean_vaf': np.nan,
+                'total_vaf': 0,
                 'n_variants': 0
             })
     
@@ -282,7 +285,7 @@ cxxc4_genes_df = pd.DataFrame(cxxc4_genes)
 cxxc4_genes_df.to_csv(os.path.join(out_dir, 'cxxc4_genes.csv'), index=False)
 
 # -------------------
-# REVISED: Chromosome-level plots - All samples side by side
+# Chromosome-level plots - All samples side by side
 # -------------------
 print("\nPlotting chromosomes (multi-sample comparison)...")
 samples = [s for s in all_data.keys() if 'vaf_chrom' in all_data[s] and 'mc_chrom' in all_data[s]]
@@ -293,7 +296,6 @@ if n_samples > 0:
         if chrom not in chrom_sizes:
             continue
         
-        # Check if any sample has data for this chromosome
         has_data = False
         for sample in samples:
             vaf_data = all_data[sample]['vaf_chrom'][all_data[sample]['vaf_chrom']['chrom'] == chrom]
@@ -304,11 +306,9 @@ if n_samples > 0:
         if not has_data:
             continue
         
-        # Create figure: 4 metrics x n_samples
         fig, axes = plt.subplots(4, n_samples, figsize=(6*n_samples, 12), 
                                 sharex=True, sharey='row')
         
-        # Handle single sample case
         if n_samples == 1:
             axes = axes.reshape(-1, 1)
         
@@ -327,7 +327,6 @@ if n_samples > 0:
             hmc = hmc_data['mean_5hmc'].values
             cxxc4 = cxxc4_data['cxxc4_signal'].values
             
-            # VAF
             axes[0, col].fill_between(bins, gaussian_filter1d(np.nan_to_num(vaf), 1.5), 
                                      alpha=0.5, color='#e74c3c')
             axes[0, col].plot(bins, gaussian_filter1d(np.nan_to_num(vaf), 1.5), 
@@ -337,7 +336,6 @@ if n_samples > 0:
             if col == 0:
                 axes[0, col].set_ylabel('VAF', fontweight='bold')
             
-            # 5mC
             axes[1, col].fill_between(bins, gaussian_filter1d(np.nan_to_num(mc), 1.5), 
                                      alpha=0.5, color='#3498db')
             axes[1, col].plot(bins, gaussian_filter1d(np.nan_to_num(mc), 1.5), 
@@ -346,7 +344,6 @@ if n_samples > 0:
             if col == 0:
                 axes[1, col].set_ylabel('5mC (%)', fontweight='bold')
             
-            # 5hmC
             axes[2, col].fill_between(bins, gaussian_filter1d(np.nan_to_num(hmc), 1.5), 
                                      alpha=0.5, color='#2ecc71')
             axes[2, col].plot(bins, gaussian_filter1d(np.nan_to_num(hmc), 1.5), 
@@ -355,7 +352,6 @@ if n_samples > 0:
             if col == 0:
                 axes[2, col].set_ylabel('5hmC (%)', fontweight='bold')
             
-            # CXXC4
             axes[3, col].fill_between(bins, gaussian_filter1d(cxxc4, 1.5), 
                                      alpha=0.5, color='#9b59b6')
             axes[3, col].plot(bins, gaussian_filter1d(cxxc4, 1.5), 
@@ -372,71 +368,114 @@ if n_samples > 0:
         plt.close()
 
 # -------------------
-# REVISED: Gene-level analysis - Side by side comparison
+# Gene-level analysis with FIXED scales
 # -------------------
 print("\nPlotting gene-level comparisons...")
 
-# First save individual integrated files
+# Save individual integrated files
 for sample in samples:
     gene_data = all_data[sample]['vaf_genes'].merge(
         all_data[sample]['meth_genes'], on=['gene', 'chrom']
     ).merge(cxxc4_genes_df, on=['gene', 'chrom'])
     gene_data.to_csv(os.path.join(out_dir, f'{sample}_gene_integrated.csv'), index=False)
 
-# Create side-by-side comparison plots
-fig, axes = plt.subplots(6, n_samples, figsize=(6*n_samples, 24))
+# Calculate global min/max for fixed scales
+all_gene_dfs = []
+for sample in samples:
+    gene_data = all_data[sample]['vaf_genes'].merge(
+        all_data[sample]['meth_genes'], on=['gene', 'chrom']
+    ).merge(cxxc4_genes_df, on=['gene', 'chrom'])
+    all_gene_dfs.append(gene_data)
+
+combined_df = pd.concat(all_gene_dfs, ignore_index=True)
+
+# Define fixed ranges with percentile clipping to avoid outliers
+vaf_range = (0, np.nanpercentile(combined_df['mean_vaf'].dropna(), 99))
+total_vaf_range = (0, np.nanpercentile(combined_df['total_vaf'].dropna(), 99))
+mc_range = (0, np.nanpercentile(combined_df['mean_5mc'].dropna(), 99))
+hmc_range = (0, np.nanpercentile(combined_df['mean_5hmc'].dropna(), 99))
+cxxc4_range = (0, np.nanpercentile(combined_df['cxxc4_signal'].dropna(), 99))
+n_variants_range = (0, np.nanpercentile(combined_df['n_variants'].dropna(), 99))
+
+# Create side-by-side comparison plots (8 plots per sample)
+fig, axes = plt.subplots(8, n_samples, figsize=(6*n_samples, 32))
 if n_samples == 1:
     axes = axes.reshape(-1, 1)
 
 for col, sample in enumerate(samples):
-    gene_data = all_data[sample]['vaf_genes'].merge(
-        all_data[sample]['meth_genes'], on=['gene', 'chrom']
-    ).merge(cxxc4_genes_df, on=['gene', 'chrom'])
-    
+    gene_data = all_gene_dfs[col]
     df = gene_data.dropna(subset=['mean_vaf', 'mean_5mc', 'mean_5hmc'])
     
     if len(df) == 0:
-        print(f"  Warning: No valid data for {sample}, skipping")
+        print(f"  Warning: No valid data for {sample}")
         continue
     
-    # VAF vs 5mC
-    axes[0, col].hexbin(df['mean_vaf'], df['mean_5mc'], gridsize=40, cmap='Blues', mincnt=1)
-    axes[0, col].set_title(f'{sample}', fontweight='bold')
-    axes[0, col].set_xlabel('VAF', fontweight='bold')
+    # Row 0: n_variants vs total_vaf
+    axes[0, col].hexbin(df['n_variants'], df['total_vaf'], gridsize=40, cmap='Reds', mincnt=1)
+    axes[0, col].set_xlim(n_variants_range)
+    axes[0, col].set_ylim(total_vaf_range)
+    axes[0, col].set_title(f'{sample}', fontweight='bold', fontsize=12)
+    axes[0, col].set_xlabel('# Variants', fontweight='bold')
     if col == 0:
-        axes[0, col].set_ylabel('5mC', fontweight='bold')
+        axes[0, col].set_ylabel('Total VAF', fontweight='bold')
     
-    # VAF vs 5hmC
-    axes[1, col].hexbin(df['mean_vaf'], df['mean_5hmc'], gridsize=40, cmap='Greens', mincnt=1)
-    axes[1, col].set_xlabel('VAF', fontweight='bold')
+    # Row 1: mean_vaf vs 5mC
+    axes[1, col].hexbin(df['mean_vaf'], df['mean_5mc'], gridsize=40, cmap='Blues', mincnt=1)
+    axes[1, col].set_xlim(vaf_range)
+    axes[1, col].set_ylim(mc_range)
+    axes[1, col].set_xlabel('Mean VAF', fontweight='bold')
     if col == 0:
-        axes[1, col].set_ylabel('5hmC', fontweight='bold')
+        axes[1, col].set_ylabel('5mC', fontweight='bold')
     
-    # VAF vs CXXC4
-    axes[2, col].hexbin(df['mean_vaf'], df['cxxc4_signal'], gridsize=40, cmap='Purples', mincnt=1)
-    axes[2, col].set_xlabel('VAF', fontweight='bold')
+    # Row 2: mean_vaf vs 5hmC
+    axes[2, col].hexbin(df['mean_vaf'], df['mean_5hmc'], gridsize=40, cmap='Greens', mincnt=1)
+    axes[2, col].set_xlim(vaf_range)
+    axes[2, col].set_ylim(hmc_range)
+    axes[2, col].set_xlabel('Mean VAF', fontweight='bold')
     if col == 0:
-        axes[2, col].set_ylabel('CXXC4', fontweight='bold')
+        axes[2, col].set_ylabel('5hmC', fontweight='bold')
     
-    # 5mC vs 5hmC
-    axes[3, col].hexbin(df['mean_5mc'], df['mean_5hmc'], gridsize=40, cmap='viridis', mincnt=1)
-    axes[3, col].set_xlabel('5mC', fontweight='bold')
+    # Row 3: mean_vaf vs CXXC4
+    axes[3, col].hexbin(df['mean_vaf'], df['cxxc4_signal'], gridsize=40, cmap='Purples', mincnt=1)
+    axes[3, col].set_xlim(vaf_range)
+    axes[3, col].set_ylim(cxxc4_range)
+    axes[3, col].set_xlabel('Mean VAF', fontweight='bold')
     if col == 0:
-        axes[3, col].set_ylabel('5hmC', fontweight='bold')
+        axes[3, col].set_ylabel('CXXC4', fontweight='bold')
     
-    # 5mC vs CXXC4
-    axes[4, col].hexbin(df['mean_5mc'], df['cxxc4_signal'], gridsize=40, cmap='plasma', mincnt=1)
+    # Row 4: 5mC vs 5hmC
+    axes[4, col].hexbin(df['mean_5mc'], df['mean_5hmc'], gridsize=40, cmap='viridis', mincnt=1)
+    axes[4, col].set_xlim(mc_range)
+    axes[4, col].set_ylim(hmc_range)
     axes[4, col].set_xlabel('5mC', fontweight='bold')
     if col == 0:
-        axes[4, col].set_ylabel('CXXC4', fontweight='bold')
+        axes[4, col].set_ylabel('5hmC', fontweight='bold')
     
-    # 5hmC vs CXXC4
-    axes[5, col].hexbin(df['mean_5hmc'], df['cxxc4_signal'], gridsize=40, cmap='magma', mincnt=1)
-    axes[5, col].set_xlabel('5hmC', fontweight='bold')
+    # Row 5: 5mC vs CXXC4
+    axes[5, col].hexbin(df['mean_5mc'], df['cxxc4_signal'], gridsize=40, cmap='plasma', mincnt=1)
+    axes[5, col].set_xlim(mc_range)
+    axes[5, col].set_ylim(cxxc4_range)
+    axes[5, col].set_xlabel('5mC', fontweight='bold')
     if col == 0:
         axes[5, col].set_ylabel('CXXC4', fontweight='bold')
+    
+    # Row 6: 5hmC vs CXXC4
+    axes[6, col].hexbin(df['mean_5hmc'], df['cxxc4_signal'], gridsize=40, cmap='magma', mincnt=1)
+    axes[6, col].set_xlim(hmc_range)
+    axes[6, col].set_ylim(cxxc4_range)
+    axes[6, col].set_xlabel('5hmC', fontweight='bold')
+    if col == 0:
+        axes[6, col].set_ylabel('CXXC4', fontweight='bold')
+    
+    # Row 7: n_variants vs mean_vaf
+    axes[7, col].hexbin(df['n_variants'], df['mean_vaf'], gridsize=40, cmap='Oranges', mincnt=1)
+    axes[7, col].set_xlim(n_variants_range)
+    axes[7, col].set_ylim(vaf_range)
+    axes[7, col].set_xlabel('# Variants', fontweight='bold')
+    if col == 0:
+        axes[7, col].set_ylabel('Mean VAF', fontweight='bold')
 
-plt.suptitle('Gene-level Multi-Sample Comparison', fontsize=16, fontweight='bold', y=0.998)
+plt.suptitle('Gene-level Multi-Sample Comparison (Fixed Scales)', fontsize=16, fontweight='bold', y=0.999)
 plt.tight_layout()
 plt.savefig(os.path.join(out_dir, 'ALL_SAMPLES_gene_comparison.png'), dpi=300, bbox_inches='tight')
 plt.close()
